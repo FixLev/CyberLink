@@ -52,6 +52,6 @@ jobs:
           ## 📥 Установка
           ### Быстрая установка
           ```bash
-          git clone https://github.com/cyberlink/cyberlink.git
+          git clone https://github.com/FixLev/CyberLink.git
           cd cyberlink
           python run.py

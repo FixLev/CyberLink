@@ -19,7 +19,7 @@ class CyberLinkUpdater:
     def __init__(self):
         self.config_path = Path("config.json")
         self.version_file = Path("version.txt")
-        self.repo_url = "https://api.github.com/repos/cyberlink/cyberlink"
+        self.repo_url = "https://api.github.com/repos/FixLev/CyberLink"
         self.update_queue = queue.Queue()
         
         # Создаем версионный файл

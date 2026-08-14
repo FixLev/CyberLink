@@ -1,4 +1,6 @@
+# core/__init__.py
 # CyberLink - Core package
+
 from .database import Database
 from .network import P2PNetwork
 from .user_manager import UserManager
