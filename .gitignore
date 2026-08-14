@@ -1,0 +1,7 @@
+# Создаем файл .gitignore
+echo "# CyberLink .gitignore" > .gitignore
+echo "data/*.db" >> .gitignore
+echo "logs/" >> .gitignore
+echo "__pycache__/" >> .gitignore
+echo "*.pyc" >> .gitignore
+echo ".DS_Store" >> .gitignore
