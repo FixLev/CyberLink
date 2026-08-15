@@ -1,5 +1,5 @@
 # src/views/login_view.py
-# Окно входа — вытянутое, без подзаголовка
+# Окно входа с кастомным курсором
 
 import random
 import math
@@ -10,12 +10,10 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 
+from src.theme.colors import COLORS
 from src.core.user_manager import UserManager
+from src.widgets.custom_cursor_widget import CustomCursorWidget
 
-
-# ============================================
-# КОСМИЧЕСКИЙ ФОН
-# ============================================
 
 class LoginSpaceWidget(QWidget):
     """Космический фон для окна входа"""
@@ -73,10 +71,6 @@ class LoginSpaceWidget(QWidget):
         self.update()
 
 
-# ============================================
-# ОКНО ВХОДА
-# ============================================
-
 class LoginView(QDialog):
     def __init__(self):
         super().__init__()
@@ -84,22 +78,21 @@ class LoginView(QDialog):
         self.username = None
         self.drag_pos = None
         self.password_visible = False
+        self.cursor = None
         
         self.init_ui()
     
     def init_ui(self):
         self.setWindowTitle("CyberLink - Вход")
-        self.setFixedSize(420, 460)  # Уже и вытянутее
+        self.setFixedSize(480, 460)
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         
-        # Космический фон
         self.space_widget = LoginSpaceWidget(self)
-        self.space_widget.setGeometry(0, 0, 420, 460)
+        self.space_widget.setGeometry(0, 0, 480, 460)
         
-        # Стеклянная панель
         glass = QFrame(self.space_widget)
-        glass.setGeometry(12, 12, 396, 436)
+        glass.setGeometry(15, 15, 450, 430)
         glass.setStyleSheet("""
             QFrame {
                 background-color: rgba(10, 10, 25, 0.15);
@@ -112,10 +105,16 @@ class LoginView(QDialog):
         glass.mouseMoveEvent = self.mouseMoveEvent
         glass.mouseReleaseEvent = self.mouseReleaseEvent
         
-        # Кнопка закрытия
+        # === СОЗДАЁМ КУРСОР ДЛЯ ОКНА ЛОГИНА ===
+        try:
+            self.cursor = CustomCursorWidget(self)
+            self.cursor.raise_()
+        except:
+            pass
+        
         close_btn = QPushButton("✕", glass)
         close_btn.setFixedSize(28, 28)
-        close_btn.move(358, 10)
+        close_btn.move(410, 10)
         close_btn.setCursor(Qt.PointingHandCursor)
         close_btn.setStyleSheet("""
             QPushButton {
@@ -132,12 +131,10 @@ class LoginView(QDialog):
         """)
         close_btn.clicked.connect(self.reject)
         
-        # Основной layout
         layout = QVBoxLayout(glass)
         layout.setSpacing(10)
-        layout.setContentsMargins(28, 20, 28, 20)
+        layout.setContentsMargins(35, 20, 35, 20)
         
-        # Логотип
         logo = QLabel("✦ CYBERLINK")
         logo.setStyleSheet("""
             font-size: 26px;
@@ -152,76 +149,85 @@ class LoginView(QDialog):
         
         layout.addSpacing(25)
         
-        # === Поле логина ===
+        # Поле логина - без @
         self.username_input = QLineEdit()
-        self.username_input.setPlaceholderText("@никнейм")
+        self.username_input.setPlaceholderText("Введите логин")
         self.username_input.setMaxLength(24)
         self.username_input.setStyleSheet("""
             QLineEdit {
-                background: rgba(30, 30, 48, 0.7);
+                background: rgba(30, 30, 48, 0.6);
                 color: #f5f5f5;
                 border: 1px solid rgba(79, 195, 247, 0.15);
-                border-radius: 10px;
+                border-radius: 12px;
                 padding: 12px 16px;
                 font-size: 14px;
                 font-family: 'TT Mussels', 'Arial', sans-serif;
+                font-smooth: always;
+                -webkit-font-smoothing: antialiased;
             }
             QLineEdit:focus {
-                border-color: rgba(79, 195, 247, 0.5);
-                background: rgba(30, 30, 48, 0.85);
+                border-color: rgba(79, 195, 247, 0.4);
+                background: rgba(30, 30, 48, 0.8);
             }
             QLineEdit::placeholder {
                 color: rgba(255, 255, 255, 0.3);
+                font-style: italic;
             }
         """)
         layout.addWidget(self.username_input)
         
-        # === Поле пароля ===
+        # Поле пароля - без замка
         password_container = QWidget()
         password_container.setStyleSheet("background: transparent;")
         password_layout = QHBoxLayout(password_container)
         password_layout.setContentsMargins(0, 0, 0, 0)
-        password_layout.setSpacing(8)
+        password_layout.setSpacing(0)
         
         self.password_input = QLineEdit()
-        self.password_input.setPlaceholderText("Пароль")
+        self.password_input.setPlaceholderText("Введите пароль")
         self.password_input.setEchoMode(QLineEdit.Password)
         self.password_input.setMaxLength(24)
         self.password_input.setStyleSheet("""
             QLineEdit {
-                background: rgba(30, 30, 48, 0.7);
+                background: rgba(30, 30, 48, 0.6);
                 color: #f5f5f5;
                 border: 1px solid rgba(79, 195, 247, 0.15);
-                border-radius: 10px;
+                border-radius: 12px 0px 0px 12px;
                 padding: 12px 16px;
                 font-size: 14px;
                 font-family: 'TT Mussels', 'Arial', sans-serif;
+                border-right: none;
+                font-smooth: always;
+                -webkit-font-smoothing: antialiased;
             }
             QLineEdit:focus {
-                border-color: rgba(79, 195, 247, 0.5);
-                background: rgba(30, 30, 48, 0.85);
+                border-color: rgba(79, 195, 247, 0.4);
+                background: rgba(30, 30, 48, 0.8);
             }
             QLineEdit::placeholder {
                 color: rgba(255, 255, 255, 0.3);
+                font-style: italic;
             }
         """)
         password_layout.addWidget(self.password_input, stretch=1)
         
-        # Кнопка-глазик
         self.eye_btn = QPushButton("👁")
-        self.eye_btn.setFixedSize(42, 42)
+        self.eye_btn.setFixedSize(46, 46)
         self.eye_btn.setCursor(Qt.PointingHandCursor)
         self.eye_btn.setStyleSheet("""
             QPushButton {
-                background: rgba(30, 30, 48, 0.7);
+                background: rgba(30, 30, 48, 0.6);
                 color: #8888aa;
                 border: 1px solid rgba(79, 195, 247, 0.15);
-                border-radius: 10px;
-                font-size: 17px;
+                border-radius: 0px 12px 12px 0px;
+                font-size: 18px;
                 padding: 0px;
+                border-left: none;
+                font-smooth: always;
+                -webkit-font-smoothing: antialiased;
             }
             QPushButton:hover {
-                background: rgba(30, 30, 48, 0.85);
+                background: rgba(30, 30, 48, 0.8);
                 color: #f5f5f5;
             }
         """)
@@ -230,9 +236,8 @@ class LoginView(QDialog):
         
         layout.addWidget(password_container)
         
-        layout.addSpacing(18)
+        layout.addSpacing(15)
         
-        # Кнопка входа
         self.action_btn = QPushButton("🚀 Войти / Создать")
         self.action_btn.setCursor(Qt.PointingHandCursor)
         self.action_btn.setStyleSheet("""
@@ -242,11 +247,13 @@ class LoginView(QDialog):
                     stop:1 #7b2ffc);
                 color: white;
                 border: none;
-                border-radius: 10px;
-                padding: 13px;
+                border-radius: 12px;
+                padding: 14px;
                 font-size: 14px;
                 font-weight: bold;
                 font-family: 'TT Mussels', 'Arial', sans-serif;
+                font-smooth: always;
+                -webkit-font-smoothing: antialiased;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -257,7 +264,6 @@ class LoginView(QDialog):
         self.action_btn.clicked.connect(self.handle_auth)
         layout.addWidget(self.action_btn)
         
-        # Статус
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("""
             color: #ff6b6b;
@@ -265,6 +271,8 @@ class LoginView(QDialog):
             font-family: 'TT Mussels', 'Arial', sans-serif;
             background: transparent;
             border: none;
+            font-smooth: always;
+            -webkit-font-smoothing: antialiased;
         """)
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
@@ -279,12 +287,15 @@ class LoginView(QDialog):
             self.eye_btn.setText("🙈")
             self.eye_btn.setStyleSheet("""
                 QPushButton {
-                    background: rgba(30, 30, 48, 0.85);
+                    background: rgba(30, 30, 48, 0.8);
                     color: #4fc3f7;
                     border: 1px solid rgba(79, 195, 247, 0.4);
-                    border-radius: 10px;
-                    font-size: 17px;
+                    border-radius: 0px 12px 12px 0px;
+                    font-size: 18px;
                     padding: 0px;
+                    border-left: none;
+                    font-smooth: always;
+                    -webkit-font-smoothing: antialiased;
                 }
             """)
         else:
@@ -292,15 +303,18 @@ class LoginView(QDialog):
             self.eye_btn.setText("👁")
             self.eye_btn.setStyleSheet("""
                 QPushButton {
-                    background: rgba(30, 30, 48, 0.7);
+                    background: rgba(30, 30, 48, 0.6);
                     color: #8888aa;
                     border: 1px solid rgba(79, 195, 247, 0.15);
-                    border-radius: 10px;
-                    font-size: 17px;
+                    border-radius: 0px 12px 12px 0px;
+                    font-size: 18px;
                     padding: 0px;
+                    border-left: none;
+                    font-smooth: always;
+                    -webkit-font-smoothing: antialiased;
                 }
                 QPushButton:hover {
-                    background: rgba(30, 30, 48, 0.85);
+                    background: rgba(30, 30, 48, 0.8);
                     color: #f5f5f5;
                 }
             """)
@@ -321,17 +335,18 @@ class LoginView(QDialog):
             self.status_label.setText("❌ Заполните все поля")
             return
         
-        if not username.startswith('@'):
-            self.status_label.setText("❌ Логин должен начинаться с @")
+        # Проверяем, не начинается ли с @
+        if username.startswith('@'):
+            self.status_label.setText("❌ Не используйте @ в логине")
             return
         
-        clean_username = username[1:]
+        clean_username = username
         
         if not clean_username:
-            self.status_label.setText("❌ Введите никнейм после @")
+            self.status_label.setText("❌ Введите логин")
             return
         
-        if not self.validate_input(username):
+        if not self.validate_input(clean_username):
             self.status_label.setText("❌ Только латиница, цифры и _")
             return
         
@@ -389,3 +404,8 @@ class LoginView(QDialog):
             self.handle_auth()
         else:
             super().keyPressEvent(event)
+    
+    def closeEvent(self, event):
+        if hasattr(self, 'cursor') and self.cursor:
+            self.cursor.stop()
+        event.accept()

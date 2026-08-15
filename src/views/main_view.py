@@ -1,24 +1,23 @@
 # src/views/main_view.py
-# Главное окно CyberLink с космосом и кометой
+# Главное окно с навигацией, чатами, друзьями, профилем и настройками
 
 import random
 import math
 import time
-from pathlib import Path
 
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 
 from src.theme.colors import COLORS
+from src.views.chat_view import ChatView
+from src.views.friends_view import FriendsView
+from src.views.profile_view import ProfileView
+from src.views.settings_view import SettingsView
 
-
-# ============================================
-# КОСМИЧЕСКИЙ ФОН
-# ============================================
 
 class SpaceWidget(QWidget):
-    """Анимированный космический фон"""
+    """Космический фон с анимированными звёздами и кометами"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -46,7 +45,6 @@ class SpaceWidget(QWidget):
     
     def _create_comet(self):
         side = random.choice(['left', 'right', 'top', 'bottom'])
-        
         angle = random.uniform(20, 60) * (1 if random.choice([True, False]) else -1)
         speed = random.uniform(150, 250)
         
@@ -86,6 +84,7 @@ class SpaceWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
         
         w = self.width()
         h = self.height()
@@ -258,67 +257,214 @@ class SpaceWidget(QWidget):
         self.update()
 
 
-# ============================================
-# ГЛАВНОЕ ОКНО
-# ============================================
-
 class MainView(QMainWindow):
     def __init__(self, username, network, database):
         super().__init__()
         self.username = username
         self.network = network
         self.database = database
+        self.current_mode = 'chats'
+        self.drag_pos = None
+        self.chat_padding = 30
+        self.cursor_widget = None
         
         self.setWindowTitle(f"CyberLink - @{username}")
-        self.setGeometry(100, 100, 1200, 800)
-        self.setMinimumSize(900, 600)
+        self.setGeometry(100, 100, 1300, 800)
+        self.setMinimumSize(1000, 600)
         self.setWindowFlags(Qt.FramelessWindowHint)
         
-        self.drag_pos = None
-        
         self.init_ui()
-        self.load_contacts()
     
     def init_ui(self):
+        # Космический фон
         self.space_widget = SpaceWidget(self)
         self.setCentralWidget(self.space_widget)
         
+        # Стеклянная панель
         glass = QFrame(self.space_widget)
-        glass.setGeometry(15, 15, self.width() - 30, self.height() - 30)
+        glass.setGeometry(10, 10, self.width() - 20, self.height() - 20)
         glass.setObjectName("glass_panel")
-        glass.setStyleSheet(f"""
-            QFrame#glass_panel {{
+        glass.setStyleSheet("""
+            QFrame#glass_panel {
                 background-color: rgba(10, 10, 25, 0.12);
                 border: 1px solid rgba(79, 195, 247, 0.05);
-                border-radius: 20px;
-            }}
+                border-radius: 16px;
+            }
         """)
         
-        layout = QVBoxLayout(glass)
-        layout.setContentsMargins(20, 15, 20, 15)
-        layout.setSpacing(10)
+        # Основной layout для стеклянной панели
+        main_layout = QVBoxLayout(glass)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
-        header = self._create_header(glass)
-        layout.addWidget(header)
+        # === 1. ВЕРХНЯЯ ПАНЕЛЬ ===
+        top_bar = self._create_top_bar(glass)
+        main_layout.addWidget(top_bar)
         
-        nav = self._create_navigation()
-        layout.addWidget(nav)
+        # === 2. ВЫБОРКА (навигация) ===
+        nav_bar = self._create_nav_bar()
+        main_layout.addWidget(nav_bar)
         
-        content = self._create_content()
-        layout.addWidget(content, stretch=1)
+        # === 3. ОСНОВНАЯ ОБЛАСТЬ ===
+        content_split = QSplitter(Qt.Horizontal)
+        content_split.setHandleWidth(0)
+        content_split.setStyleSheet("QSplitter::handle { background: transparent; }")
+        
+        # Левая панель (список чатов)
+        self.chat_panel = QFrame()
+        self.chat_panel.setFixedWidth(400)
+        self.chat_panel.setStyleSheet("border-right: 1px solid rgba(79, 195, 247, 0.06);")
+        self.chat_panel_layout = QVBoxLayout(self.chat_panel)
+        self.chat_panel_layout.setContentsMargins(12, 12, 12, 12)
+        self.chat_panel_layout.setSpacing(10)
+        
+        # Поиск
+        search = QLineEdit()
+        search.setPlaceholderText("🔍 Поиск...")
+        search.setStyleSheet("""
+            QLineEdit {
+                background: rgba(30, 30, 48, 0.5);
+                color: #f5f5f5;
+                border: 1px solid rgba(79, 195, 247, 0.08);
+                border-radius: 12px;
+                padding: 10px 14px;
+                font-size: 14px;
+                font-family: 'TT Mussels', 'Arial', sans-serif;
+            }
+            QLineEdit:focus {
+                border-color: rgba(79, 195, 247, 0.3);
+            }
+            QLineEdit::placeholder {
+                color: rgba(255, 255, 255, 0.25);
+            }
+        """)
+        self.chat_panel_layout.addWidget(search)
+        
+        # Список чатов
+        self.chat_list = QListWidget()
+        self.chat_list.setStyleSheet("""
+            QListWidget {
+                background: transparent;
+                border: none;
+                outline: none;
+                font-family: 'TT Mussels', 'Arial', sans-serif;
+            }
+            QListWidget::item {
+                padding: 4px 8px;
+                border-radius: 8px;
+                margin: 1px 0;
+                min-height: 30px;
+            }
+            QListWidget::item:hover {
+                background: rgba(255, 255, 255, 0.04);
+            }
+            QListWidget::item:selected {
+                background: rgba(79, 195, 247, 0.08);
+            }
+        """)
+        self.chat_panel_layout.addWidget(self.chat_list)
+        
+        content_split.addWidget(self.chat_panel)
+        
+        # Правая панель (рабочая зона)
+        self.work_area = QStackedWidget()
+        content_split.addWidget(self.work_area)
+        
+        # Добавляем страницы в рабочую зону
+        self.chat_page = ChatView(self.username)
+        self.friends_page = FriendsView(self.username)
+        self.profile_page = ProfileView(self.username)
+        self.settings_page = SettingsView(self.username, self)  # Передаём self для доступа к курсору
+        
+        self.work_area.addWidget(self.chat_page)
+        self.work_area.addWidget(self.friends_page)
+        self.work_area.addWidget(self.profile_page)
+        self.work_area.addWidget(self.settings_page)
+        
+        # По умолчанию показываем чаты
+        self.work_area.setCurrentIndex(0)
+        
+        # Устанавливаем соотношение размеров
+        content_split.setSizes([400, self.width() - 400])
+        
+        main_layout.addWidget(content_split, stretch=1)
+        
+        # === 4. НИЖНЯЯ ПАНЕЛЬ ===
+        status_bar = self._create_status_bar()
+        main_layout.addWidget(status_bar)
         
         self.glass_panel = glass
-        self._add_control_buttons(glass)
+        self.content_split = content_split
+        
+        # Заполняем чаты
+        self.update_chat_list()
     
-    def _add_control_buttons(self, parent):
-        btn_container = QFrame(parent)
-        btn_container.setGeometry(parent.width() - 120, 10, 110, 35)
-        btn_container.setStyleSheet("background: transparent;")
+    def set_cursor_widget(self, cursor):
+        """Установка виджета курсора"""
+        self.cursor_widget = cursor
+    
+    def update_chat_list(self):
+        """Обновление списка чатов"""
+        self.chat_list.clear()
         
-        layout = QHBoxLayout(btn_container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
+        # Показываем сообщение о том, что чатов нет
+        empty_widget = QWidget()
+        empty_layout = QVBoxLayout(empty_widget)
+        empty_layout.setAlignment(Qt.AlignCenter)
         
+        empty_icon = QLabel("💬")
+        empty_icon.setStyleSheet("font-size: 48px; color: #8888aa;")
+        empty_icon.setAlignment(Qt.AlignCenter)
+        empty_layout.addWidget(empty_icon)
+        
+        empty_text = QLabel("Нет активных чатов")
+        empty_text.setStyleSheet("""
+            color: #8888aa;
+            font-size: 16px;
+            font-family: 'TT Mussels', 'Arial', sans-serif;
+        """)
+        empty_text.setAlignment(Qt.AlignCenter)
+        empty_layout.addWidget(empty_text)
+        
+        empty_sub = QLabel("Начните новый диалог или\nдобавьте контакт")
+        empty_sub.setStyleSheet("""
+            color: #666688;
+            font-size: 13px;
+            font-family: 'TT Mussels', 'Arial', sans-serif;
+        """)
+        empty_sub.setAlignment(Qt.AlignCenter)
+        empty_layout.addWidget(empty_sub)
+        
+        item = QListWidgetItem()
+        item.setSizeHint(empty_widget.sizeHint())
+        self.chat_list.addItem(item)
+        self.chat_list.setItemWidget(item, empty_widget)
+    
+    def _create_top_bar(self, parent):
+        bar = QFrame(parent)
+        bar.setFixedHeight(50)
+        bar.setStyleSheet("border-bottom: 1px solid rgba(79, 195, 247, 0.06);")
+        bar.mousePressEvent = self.mousePressEvent
+        bar.mouseMoveEvent = self.mouseMoveEvent
+        bar.mouseReleaseEvent = self.mouseReleaseEvent
+        
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(12, 0, 12, 0)
+        
+        logo = QLabel("✦ CYBERLINK")
+        logo.setStyleSheet("""
+            font-size: 18px;
+            font-weight: bold;
+            color: #f5f5f5;
+            font-family: 'Karvx', 'Arial', sans-serif;
+        """)
+        logo.setCursor(Qt.PointingHandCursor)
+        logo.mousePressEvent = lambda e: None
+        layout.addWidget(logo)
+        
+        layout.addStretch()
+        
+        # Кнопки управления
         buttons = [
             ("━", self.showMinimized),
             ("☐", self._toggle_maximize),
@@ -326,8 +472,8 @@ class MainView(QMainWindow):
         ]
         
         for text, callback in buttons:
-            btn = QPushButton(text, btn_container)
-            btn.setFixedSize(30, 30)
+            btn = QPushButton(text, bar)
+            btn.setFixedSize(28, 28)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet("""
                 QPushButton {
@@ -338,14 +484,14 @@ class MainView(QMainWindow):
                     font-size: 16px;
                 }
                 QPushButton:hover {
-                    background: rgba(255, 255, 255, 0.1);
+                    background: rgba(255, 255, 255, 0.08);
                 }
             """)
             if text == "✕":
                 btn.setStyleSheet("""
                     QPushButton {
                         background: transparent;
-                        color: #ff2d55;
+                        color: #8888aa;
                         border: none;
                         border-radius: 5px;
                         font-size: 16px;
@@ -358,7 +504,148 @@ class MainView(QMainWindow):
             btn.clicked.connect(callback)
             layout.addWidget(btn)
         
-        self.btn_container = btn_container
+        return bar
+    
+    def _create_nav_bar(self):
+        nav = QFrame()
+        nav.setFixedHeight(40)
+        nav.setStyleSheet("border-bottom: 1px solid rgba(79, 195, 247, 0.06);")
+        
+        layout = QHBoxLayout(nav)
+        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setSpacing(4)
+        
+        nav_items = [
+            {"icon": "💬", "label": "Чаты", "key": "chats"},
+            {"icon": "🤝", "label": "Друзья", "key": "friends"},
+            {"icon": "👤", "label": "Профиль", "key": "profile"},
+            {"icon": "⚙️", "label": "Настройки", "key": "settings"},
+        ]
+        
+        self.nav_buttons = []
+        
+        for item in nav_items:
+            btn = QPushButton(f"{item['icon']} {item['label']}")
+            btn.setFixedHeight(30)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setProperty("key", item["key"])
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: transparent;
+                    color: #b0b0c0;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 4px 14px;
+                    font-size: 13px;
+                    font-family: 'TT Mussels', 'Arial', sans-serif;
+                }
+                QPushButton:hover {
+                    background: rgba(255, 255, 255, 0.05);
+                }
+            """)
+            btn.clicked.connect(lambda checked, k=item["key"]: self.switch_mode(k))
+            layout.addWidget(btn)
+            self.nav_buttons.append(btn)
+        
+        if self.nav_buttons:
+            self.nav_buttons[0].setStyleSheet("""
+                QPushButton {
+                    background: rgba(79, 195, 247, 0.12);
+                    color: #f5f5f5;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 4px 14px;
+                    font-size: 13px;
+                    font-family: 'TT Mussels', 'Arial', sans-serif;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background: rgba(79, 195, 247, 0.18);
+                }
+            """)
+        
+        layout.addStretch()
+        return nav
+    
+    def _create_status_bar(self):
+        bar = QFrame()
+        bar.setFixedHeight(30)
+        bar.setStyleSheet("border-top: 1px solid rgba(79, 195, 247, 0.06);")
+        
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(12, 0, 12, 0)
+        
+        # Сохраняем ссылку на лейбл статуса для обновления из настроек
+        self.status_label = QLabel("🟢 Онлайн")
+        self.status_label.setStyleSheet("color: #4fc3f7; font-size: 12px; font-family: 'TT Mussels', 'Arial', sans-serif;")
+        layout.addWidget(self.status_label)
+        
+        layout.addStretch()
+        
+        user = QLabel(f"🌟 @{self.username}")
+        user.setStyleSheet("color: #b0b0c0; font-size: 12px; font-family: 'TT Mussels', 'Arial', sans-serif;")
+        layout.addWidget(user)
+        
+        layout.addStretch()
+        
+        unread = QLabel("0 💫 непрочитанных")
+        unread.setStyleSheet("color: #8888aa; font-size: 12px; font-family: 'TT Mussels', 'Arial', sans-serif;")
+        layout.addWidget(unread)
+        
+        layout.addStretch()
+        
+        p2p = QLabel("🌐 P2P")
+        p2p.setStyleSheet("color: #4fc3f7; font-size: 12px; font-family: 'TT Mussels', 'Arial', sans-serif;")
+        layout.addWidget(p2p)
+        
+        return bar
+    
+    def switch_mode(self, mode):
+        """Переключение между режимами"""
+        self.current_mode = mode
+        
+        for btn in self.nav_buttons:
+            key = btn.property("key")
+            if key == mode:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background: rgba(79, 195, 247, 0.12);
+                        color: #f5f5f5;
+                        border: none;
+                        border-radius: 8px;
+                        padding: 4px 14px;
+                        font-size: 13px;
+                        font-family: 'TT Mussels', 'Arial', sans-serif;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background: rgba(79, 195, 247, 0.18);
+                    }
+                """)
+            else:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background: transparent;
+                        color: #b0b0c0;
+                        border: none;
+                        border-radius: 8px;
+                        padding: 4px 14px;
+                        font-size: 13px;
+                        font-family: 'TT Mussels', 'Arial', sans-serif;
+                    }
+                    QPushButton:hover {
+                        background: rgba(255, 255, 255, 0.05);
+                    }
+                """)
+        
+        if mode == "chats":
+            self.work_area.setCurrentIndex(0)
+        elif mode == "friends":
+            self.work_area.setCurrentIndex(1)
+        elif mode == "profile":
+            self.work_area.setCurrentIndex(2)
+        elif mode == "settings":
+            self.work_area.setCurrentIndex(3)
     
     def _toggle_maximize(self):
         if self.isMaximized():
@@ -366,149 +653,7 @@ class MainView(QMainWindow):
         else:
             self.showMaximized()
     
-    def _create_header(self, parent):
-        header = QFrame(parent)
-        header.setFixedHeight(50)
-        header.setStyleSheet("border-bottom: 1px solid rgba(79, 195, 247, 0.06);")
-        header.setCursor(Qt.ArrowCursor)
-        
-        # ВСЯ область заголовка — для перетаскивания
-        header.mousePressEvent = self.mousePressEvent
-        header.mouseMoveEvent = self.mouseMoveEvent
-        header.mouseReleaseEvent = self.mouseReleaseEvent
-        
-        layout = QHBoxLayout(header)
-        layout.setContentsMargins(10, 0, 10, 0)
-        
-        # Логотип — Karvx
-        logo = QLabel("✦ CYBERLINK")
-        logo.setStyleSheet("""
-            font-size: 22px;
-            font-weight: bold;
-            color: #f5f5f5;
-            font-family: 'Karvx', 'Arial', sans-serif;
-        """)
-        logo.setCursor(Qt.PointingHandCursor)
-        # Логотип НЕ перетаскивает окно
-        logo.mousePressEvent = lambda e: None
-        logo.mouseMoveEvent = lambda e: None
-        logo.mouseReleaseEvent = lambda e: None
-        layout.addWidget(logo)
-        
-        layout.addStretch()
-        
-        return header
-    
-    def _create_navigation(self):
-        nav = QFrame()
-        nav.setFixedHeight(50)
-        
-        layout = QHBoxLayout(nav)
-        layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(5)
-        
-        nav_items = ["Чаты", "Профиль"]
-        self.nav_buttons = []
-        
-        for i, name in enumerate(nav_items):
-            btn = QPushButton(name)
-            btn.setFixedHeight(36)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {COLORS['accent_primary'] if i == 0 else 'transparent'};
-                    color: {'white' if i == 0 else COLORS['text_secondary']};
-                    border: none;
-                    border-radius: 10px;
-                    padding: 8px 20px;
-                    font-weight: {'bold' if i == 0 else 'normal'};
-                    font-size: 14px;
-                    font-family: 'TT Mussels', 'Arial', sans-serif;
-                }}
-                QPushButton:hover {{
-                    background: {COLORS['accent_primary'] if i == 0 else 'rgba(255,255,255,0.05)'};
-                }}
-            """)
-            btn.clicked.connect(lambda checked, idx=i: self.switch_page(idx))
-            layout.addWidget(btn)
-            self.nav_buttons.append(btn)
-        
-        layout.addStretch()
-        return nav
-    
-    def _create_content(self):
-        content = QFrame()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(20, 30, 20, 30)
-        
-        welcome = QLabel("🌌 Добро пожаловать в CyberLink!")
-        welcome.setStyleSheet("""
-            font-size: 28px;
-            font-weight: bold;
-            color: #f5f5f5;
-            font-family: 'TT Mussels', 'Arial', sans-serif;
-        """)
-        welcome.setAlignment(Qt.AlignCenter)
-        layout.addWidget(welcome)
-        
-        subtitle = QLabel("Космический P2P мессенджер с полным шифрованием")
-        subtitle.setStyleSheet("""
-            font-size: 16px;
-            color: #b0b0c0;
-            font-family: 'TT Mussels', 'Arial', sans-serif;
-        """)
-        subtitle.setAlignment(Qt.AlignCenter)
-        layout.addWidget(subtitle)
-        
-        info = QLabel("🚀 Скоро здесь будет полный функционал")
-        info.setStyleSheet("""
-            font-size: 14px;
-            color: #6a6a7a;
-            font-family: 'TT Mussels', 'Arial', sans-serif;
-        """)
-        info.setAlignment(Qt.AlignCenter)
-        layout.addWidget(info)
-        
-        layout.addStretch()
-        return content
-    
-    def switch_page(self, index):
-        for i, btn in enumerate(self.nav_buttons):
-            if i == index:
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background: {COLORS['accent_primary']};
-                        color: white;
-                        border: none;
-                        border-radius: 10px;
-                        padding: 8px 20px;
-                        font-weight: bold;
-                        font-size: 14px;
-                        font-family: 'TT Mussels', 'Arial', sans-serif;
-                    }}
-                """)
-            else:
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background: transparent;
-                        color: {COLORS['text_secondary']};
-                        border: none;
-                        border-radius: 10px;
-                        padding: 8px 20px;
-                        font-weight: normal;
-                        font-size: 14px;
-                        font-family: 'TT Mussels', 'Arial', sans-serif;
-                    }}
-                    QPushButton:hover {{
-                        background: rgba(255,255,255,0.05);
-                    }}
-                """)
-    
-    def load_contacts(self):
-        pass
-    
     def mousePressEvent(self, event):
-        # Разрешаем перетаскивание только если кликнули в верхние 80 пикселей
         if event.button() == Qt.LeftButton and event.y() <= 80:
             self.drag_pos = event.globalPos()
         else:
@@ -525,11 +670,5 @@ class MainView(QMainWindow):
     
     def resizeEvent(self, event):
         if hasattr(self, 'glass_panel'):
-            w = self.width() - 30
-            h = self.height() - 30
-            self.glass_panel.setGeometry(15, 15, w, h)
-            
-            if hasattr(self, 'btn_container'):
-                self.btn_container.setGeometry(w - 120, 10, 110, 35)
-        
+            self.glass_panel.setGeometry(10, 10, self.width() - 20, self.height() - 20)
         super().resizeEvent(event)

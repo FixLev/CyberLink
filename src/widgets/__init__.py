@@ -1,2 +1,4 @@
 # src/widgets/__init__.py
-# Виджеты CyberLink
+from .custom_cursor_widget import CustomCursorWidget
+
+__all__ = ['CustomCursorWidget']

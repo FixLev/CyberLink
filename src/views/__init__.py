@@ -3,14 +3,14 @@
 
 from .main_view import MainView
 from .login_view import LoginView
-from .settings_view import SettingsView
+from .chat_view import ChatView
 from .profile_view import ProfileView
-from .about_view import AboutView
+from .settings_view import SettingsView
 
 __all__ = [
     'MainView',
     'LoginView',
-    'SettingsView',
+    'ChatView',
     'ProfileView',
-    'AboutView',
+    'SettingsView',
 ]
