@@ -1,5 +1,5 @@
 # src/core/network.py
-# P2P сеть - С ГИГАНТСКИМ ЛОГИРОВАНИЕМ
+# P2P сеть - С ГИГАНТСКИМ ЛОГИРОВАНИЕМ И АКТИВНЫМ ПОИСКОМ
 
 import json
 import time
@@ -97,7 +97,7 @@ class P2PNetwork(QObject):
         
         # Если все заняты - случайный порт
         self._log("⚠️ ВСЕ ПОРТЫ 6881-6909 ЗАНЯТЫ! ИЩЕМ СЛУЧАЙНЫЙ...")
-        for attempt in range(10):
+        for attempt in range(20):
             port = random.randint(10000, 60000)
             self._log(f"   Попытка {attempt+1}: порт {port}...")
             try:
@@ -344,7 +344,38 @@ class P2PNetwork(QObject):
                 self.active_connections[from_id]['last_ping'] = time.time()
                 self._log(f"🔄 ОБНОВЛЁН ПИНГ ДЛЯ {from_id}")
             
-            # Обрабатываем discovery
+            # Обрабатываем who_is_here
+            if msg_type == 'who_is_here':
+                target = data.get('target')
+                self._log(f"📡 who_is_here ОТ {from_id} ИЩЕТ {target}")
+                
+                # Если ищут нас - отвечаем
+                if target == self.username:
+                    response = {
+                        'type': 'who_is_here_response',
+                        'from': self.username,
+                        'to': from_id,
+                        'username': self.username,
+                        'timestamp': time.time()
+                    }
+                    self._log(f"📤 ОТВЕЧАЕМ who_is_here ДЛЯ {from_id}")
+                    self._send_direct(from_id, response, from_ip)
+                return
+            
+            if msg_type == 'who_is_here_response':
+                found_user = data.get('username')
+                self._log(f"📡 who_is_here_response ОТ {from_id}: {found_user}")
+                if found_user and found_user not in self.discovered_users:
+                    self.discovered_users[found_user] = {
+                        'username': found_user,
+                        'ip': from_ip,
+                        'last_seen': time.time()
+                    }
+                    self._log(f"✅ ПОЛЬЗОВАТЕЛЬ {found_user} ДОБАВЛЕН В КЭШ")
+                    self.friend_online.emit(found_user)
+                return
+            
+            # Обрабатываем discover
             if msg_type == 'discover':
                 self._log(f"📡 DISCOVER ОТ {from_id}")
                 response = {
@@ -501,7 +532,7 @@ class P2PNetwork(QObject):
             return False
     
     def find_user(self, username: str) -> Optional[dict]:
-        """Поиск пользователя в сети С ЛОГАМИ"""
+        """Поиск пользователя в сети С ЛОГАМИ - АКТИВНОЕ СКАНИРОВАНИЕ"""
         try:
             if username.startswith('@'):
                 username = username[1:]
@@ -525,16 +556,19 @@ class P2PNetwork(QObject):
             from src.core.user_manager import UserManager
             um = UserManager()
             if not um.user_exists(username):
-                self._log(f"   ❌ {username} НЕ СУЩЕСТВУЕТ")
+                self._log(f"   ❌ {username} НЕ СУЩЕСТВУЕТ (локально)")
                 return None
             
-            self._log(f"   🔍 {username} СУЩЕСТВУЕТ, НО НЕ В КЭШЕ. СКАНИРУЕМ СЕТЬ...")
+            self._log(f"   🔍 {username} СУЩЕСТВУЕТ ЛОКАЛЬНО, НО НЕ В КЭШЕ. АКТИВНОЕ СКАНИРОВАНИЕ СЕТИ...")
             
-            # Активно сканируем сеть для поиска пользователя
+            # АКТИВНО СКАНИРУЕМ СЕТЬ
             ip_parts = self.local_ip.split('.')
             base_ip = '.'.join(ip_parts[:3])
-            self._log(f"   🌐 СКАНИРУЕМ ПОДСЕТЬ {base_ip}.x")
+            self._log(f"   🌐 СКАНИРУЕМ ПОДСЕТЬ {base_ip}.x ПОРТЫ {self.known_ports[:5]}...")
             
+            found = False
+            
+            # Проверяем все IP в подсети
             for i in range(1, 255):
                 ip = f"{base_ip}.{i}"
                 if ip == self.local_ip:
@@ -545,19 +579,23 @@ class P2PNetwork(QObject):
                         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                             s.settimeout(0.3)
                             s.connect((ip, port))
-                            # Отправляем запрос на идентификацию
+                            
+                            # Отправляем запрос "кто здесь?"
                             ping_data = {
-                                'type': 'find_user',
+                                'type': 'who_is_here',
                                 'from': self.username,
                                 'target': username,
                                 'timestamp': time.time()
                             }
                             s.send(json.dumps(ping_data).encode())
+                            
                             # Ждём ответ
                             response = s.recv(1024)
                             if response:
                                 data = json.loads(response.decode())
-                                if data.get('type') == 'find_user_response':
+                                self._log(f"   📥 ОТВЕТ ОТ {ip}:{port}: {data}")
+                                
+                                if data.get('type') == 'who_is_here_response':
                                     found_user = data.get('username')
                                     if found_user == username:
                                         self._log(f"   🎯 НАЙДЕН {username} на {ip}:{port}")
