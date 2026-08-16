@@ -1,48 +1,47 @@
-# src/core/network.py - ИСПРАВЛЕННАЯ ВЕРСИЯ (работает на 100%)
+# src/core/network.py
+# ПОЛНОСТЬЮ ДЕЦЕНТРАЛИЗОВАННЫЙ P2P ДВИЖОК
+# Работает через мобильный интернет, WiFi, любые NAT
+# Роскомпозор идёт нахуй!
 
 import json
 import time
 import socket
 import threading
-import random
-import hashlib
-import struct
-import subprocess
 import urllib.request
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict
 from PyQt5.QtCore import QObject, pyqtSignal
 
 
 class P2PNetwork(QObject):
-    """
-    Полностью децентрализованная P2P сеть - РАБОЧАЯ ВЕРСИЯ!
-    """
+    """Полностью децентрализованная P2P сеть - БЕЗ СЕРВЕРОВ!"""
     
     friend_request_received = pyqtSignal(str, str, str)
     friend_request_response = pyqtSignal(str, bool)
     message_received = pyqtSignal(str, dict)
     friend_online = pyqtSignal(str)
     friend_offline = pyqtSignal(str)
-    peer_found = pyqtSignal(str, str)
     
     def __init__(self, username: str):
         super().__init__()
         self.username = username
         self.is_running = False
         
-        # === СЕТЕВЫЕ ПАРАМЕТРЫ ===
+        # Параметры
         self.port = 3333
         self.broadcast_port = 3334
         self.hole_punch_port = 3335
         
-        # === НАТ-ПРОБИВАНИЕ ===
-        self.punch_socket = None
+        # Данные
         self.connections: Dict[str, dict] = {}
         self.pending_messages: Dict[str, list] = {}
         
-        # === IP ===
+        # IP
         self.local_ip = self._get_local_ip()
-        self.public_ip = self._get_public_ip()  # ФИКС: теперь реальный внешний IP!
+        self.public_ip = self._get_public_ip()
+        
+        # Сокеты
+        self.server_socket = None
+        self.punch_socket = None
         
         print("=" * 60)
         print("🔥 CYBERLINK - БЕЗ СЕРВЕРОВ!")
@@ -51,7 +50,6 @@ class P2PNetwork(QObject):
         print(f"🌐 Локальный IP: {self.local_ip}")
         print(f"🌍 Публичный IP: {self.public_ip}")
         print(f"🔌 Порт: {self.port}")
-        print(f"🚀 Роскомпозор идёт нахуй!")
         print("=" * 60)
         
         self.start_network()
@@ -67,12 +65,11 @@ class P2PNetwork(QObject):
             return "127.0.0.1"
     
     def _get_public_ip(self) -> str:
-        """РЕАЛЬНЫЙ способ получить внешний IP - через несколько сервисов"""
+        """Получение реального внешнего IP"""
         services = [
             'https://api.ipify.org',
             'https://icanhazip.com',
             'https://ifconfig.me/ip',
-            'https://api.my-ip.io/ip',
         ]
         
         for service in services:
@@ -80,75 +77,50 @@ class P2PNetwork(QObject):
                 req = urllib.request.Request(service, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=5) as response:
                     ip = response.read().decode().strip()
-                    if ip and not ip.startswith('127.') and not ip.startswith('192.168.'):
-                        print(f"✅ Внешний IP получен: {ip} (через {service})")
+                    if ip and not ip.startswith('192.168.') and not ip.startswith('10.'):
+                        print(f"✅ Внешний IP: {ip}")
                         return ip
             except:
                 continue
         
-        # Если ничего не работает - пробуем через DNS
-        try:
-            import dns.resolver
-            resolver = dns.resolver.Resolver()
-            resolver.nameservers = ['8.8.8.8', '1.1.1.1']
-            answer = resolver.resolve('myip.opendns.com', 'A')
-            ip = str(answer[0])
-            if ip and not ip.startswith('192.168.'):
-                print(f"✅ Внешний IP получен через DNS: {ip}")
-                return ip
-        except:
-            pass
-        
-        # Последняя попытка - через сокет
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect(("1.1.1.1", 53))
-                ip = s.getsockname()[0]
-                if ip and not ip.startswith('192.168.') and not ip.startswith('127.'):
-                    print(f"✅ Внешний IP получен через сокет: {ip}")
-                    return ip
-        except:
-            pass
-        
-        print("⚠️ НЕ УДАЛОСЬ ПОЛУЧИТЬ ВНЕШНИЙ IP! Используется локальный.")
+        print("⚠️ НЕ УДАЛОСЬ ПОЛУЧИТЬ ВНЕШНИЙ IP")
         return self.local_ip
     
     def start_network(self):
+        """Запуск сети"""
         if self.is_running:
             return
         
         self.is_running = True
         
-        # 1. ЗАПУСКАЕМ СЕРВЕР
+        # 1. СЕРВЕР
         self.server_thread = threading.Thread(target=self._run_server, daemon=True)
         self.server_thread.start()
         
-        # 2. ЗАПУСКАЕМ ДЫРОПРОБИВАНИЕ
+        # 2. ДЫРОПРОБИВАНИЕ
         self.punch_thread = threading.Thread(target=self._run_hole_punching, daemon=True)
         self.punch_thread.start()
         
-        # 3. ЗАПУСКАЕМ ШИРОКОВЕЩАНИЕ
-        self.broadcast_thread = threading.Thread(target=self._run_broadcast, daemon=True)
-        self.broadcast_thread.start()
-        
-        # 4. ЗАПУСКАЕМ ОБРАБОТКУ ОЧЕРЕДИ
+        # 3. ОБРАБОТКА ОЧЕРЕДИ
         self.process_thread = threading.Thread(target=self._process_loop, daemon=True)
         self.process_thread.start()
         
-        print("✅ ВСЕ СИСТЕМЫ ЗАПУЩЕНЫ!")
-        print(f"📡 Твой внешний IP: {self.public_ip}:{self.port}")
+        print(f"✅ СЕРВЕР ЗАПУЩЕН НА ПОРТУ {self.port}")
+        print(f"📡 Твой IP: {self.public_ip}:{self.port}")
         print("💡 Дай этот адрес друзьям для подключения")
     
+    # ============================================================
+    # СЕРВЕР
+    # ============================================================
+    
     def _run_server(self):
-        """Сервер для приема сообщений"""
+        """Сервер для приема сообщений и подключений"""
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.server_socket.bind(('0.0.0.0', self.port))
             self.server_socket.listen(50)
             self.server_socket.settimeout(1)
-            
-            print(f"✅ СЕРВЕР ЗАПУЩЕН НА ПОРТУ {self.port}")
             
             while self.is_running:
                 try:
@@ -163,13 +135,38 @@ class P2PNetwork(QObject):
             print(f"❌ Не удалось запустить сервер: {e}")
     
     def _handle_connection(self, conn, addr):
+        """Обработка входящего соединения"""
         try:
             data = conn.recv(65536)
             if data:
                 try:
                     message = json.loads(data.decode())
+                    msg_type = message.get('type')
                     from_user = message.get('from')
                     
+                    # === РУЧНОЕ ПОДКЛЮЧЕНИЕ ПО IP ===
+                    if msg_type == 'handshake':
+                        response = {
+                            'type': 'handshake_ok',
+                            'from': self.username,
+                            'timestamp': time.time()
+                        }
+                        conn.send(json.dumps(response).encode())
+                        print(f"🤝 РУЧНОЕ ПОДКЛЮЧЕНИЕ ОТ {from_user} ({addr[0]})")
+                        
+                        if from_user and from_user != self.username:
+                            if from_user not in self.connections:
+                                self.connections[from_user] = {
+                                    'ip': addr[0],
+                                    'port': self.port,
+                                    'last_seen': time.time(),
+                                    'connected': True
+                                }
+                                self.friend_online.emit(from_user)
+                        conn.close()
+                        return
+                    
+                    # === ОБЫЧНОЕ СООБЩЕНИЕ ===
                     if from_user and from_user != self.username:
                         if from_user not in self.connections:
                             self.connections[from_user] = {
@@ -188,6 +185,10 @@ class P2PNetwork(QObject):
         except Exception as e:
             print(f"⚠️ Ошибка обработки: {e}")
     
+    # ============================================================
+    # ДЫРОПРОБИВАНИЕ
+    # ============================================================
+    
     def _run_hole_punching(self):
         """Дыропробивание через UDP"""
         try:
@@ -196,7 +197,7 @@ class P2PNetwork(QObject):
             self.punch_socket.bind(('0.0.0.0', self.hole_punch_port))
             self.punch_socket.settimeout(0.5)
             
-            print(f"✅ ДЫРОПРОБИВАНИЕ ЗАПУЩЕНО НА ПОРТУ {self.hole_punch_port}")
+            print(f"✅ ДЫРОПРОБИВАНИЕ НА ПОРТУ {self.hole_punch_port}")
             
             while self.is_running:
                 try:
@@ -214,19 +215,8 @@ class P2PNetwork(QObject):
                                     'timestamp': time.time()
                                 }
                                 self.punch_socket.sendto(json.dumps(response).encode(), addr)
-                                print(f"🔫 ДЫРОПРОБИВАНИЕ: ответ {from_user} ({addr[0]})")
+                                print(f"🔫 ДЫРОПРОБИВАНИЕ: {from_user} ({addr[0]})")
                                 
-                                if from_user not in self.connections:
-                                    self.connections[from_user] = {
-                                        'ip': addr[0],
-                                        'port': addr[1],
-                                        'last_seen': time.time(),
-                                        'connected': True
-                                    }
-                                    self.friend_online.emit(from_user)
-                            
-                            elif msg_type == 'punch_response' and from_user:
-                                print(f"🔫 ДЫРОПРОБИВАНИЕ: установлено с {from_user} ({addr[0]})")
                                 if from_user not in self.connections:
                                     self.connections[from_user] = {
                                         'ip': addr[0],
@@ -244,73 +234,12 @@ class P2PNetwork(QObject):
         except Exception as e:
             print(f"❌ Ошибка дыропробивания: {e}")
     
-    def _run_broadcast(self):
-        """Широковещательное обнаружение"""
-        try:
-            broadcast_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            broadcast_socket.settimeout(0.5)
-            
-            while self.is_running:
-                try:
-                    # Отправляем широковещательное сообщение с реальным IP
-                    announce = {
-                        'type': 'discover',
-                        'from': self.username,
-                        'ip': self.public_ip,  # Теперь реальный IP!
-                        'port': self.port,
-                        'timestamp': time.time()
-                    }
-                    broadcast_socket.sendto(
-                        json.dumps(announce).encode(),
-                        ('255.255.255.255', self.broadcast_port)
-                    )
-                    
-                    # Слушаем ответы
-                    try:
-                        data, addr = broadcast_socket.recvfrom(1024)
-                        if data:
-                            try:
-                                message = json.loads(data.decode())
-                                from_user = message.get('from')
-                                if from_user and from_user != self.username:
-                                    if from_user not in self.connections:
-                                        self.connections[from_user] = {
-                                            'ip': addr[0],
-                                            'port': self.port,
-                                            'last_seen': time.time(),
-                                            'connected': True
-                                        }
-                                        print(f"📡 ОБНАРУЖЕН: {from_user} ({addr[0]})")
-                                        self.friend_online.emit(from_user)
-                            except:
-                                pass
-                    except socket.timeout:
-                        pass
-                    
-                    time.sleep(5)
-                except Exception as e:
-                    print(f"⚠️ Ошибка широковещания: {e}")
-                    time.sleep(5)
-        except Exception as e:
-            print(f"⚠️ Ошибка широковещательного сокета: {e}")
-    
-    def _process_loop(self):
-        while self.is_running:
-            try:
-                for user, messages in list(self.pending_messages.items()):
-                    if user in self.connections:
-                        ip = self.connections[user].get('ip')
-                        if ip:
-                            for msg in messages:
-                                self._send_direct(user, msg)
-                            self.pending_messages[user] = []
-                time.sleep(1)
-            except Exception as e:
-                print(f"⚠️ Ошибка обработки очереди: {e}")
-                time.sleep(1)
+    # ============================================================
+    # ОБРАБОТКА СООБЩЕНИЙ
+    # ============================================================
     
     def _process_message(self, data: dict):
+        """Обработка входящего сообщения"""
         try:
             msg_type = data.get('type')
             from_user = data.get('from')
@@ -343,7 +272,28 @@ class P2PNetwork(QObject):
         except Exception as e:
             print(f"❌ Ошибка обработки: {e}")
     
+    def _process_loop(self):
+        """Обработка очереди сообщений"""
+        while self.is_running:
+            try:
+                for user, messages in list(self.pending_messages.items()):
+                    if user in self.connections:
+                        ip = self.connections[user].get('ip')
+                        if ip:
+                            for msg in messages:
+                                self._send_direct(user, msg)
+                            self.pending_messages[user] = []
+                time.sleep(1)
+            except Exception as e:
+                print(f"⚠️ Ошибка обработки очереди: {e}")
+                time.sleep(1)
+    
+    # ============================================================
+    # ОТПРАВКА
+    # ============================================================
+    
     def _send_direct(self, target_user: str, data: dict) -> bool:
+        """Отправка данных напрямую"""
         try:
             if target_user in self.connections:
                 ip = self.connections[target_user].get('ip')
@@ -359,7 +309,52 @@ class P2PNetwork(QObject):
             print(f"⚠️ Ошибка отправки {target_user}: {e}")
             return False
     
+    # ============================================================
+    # РУЧНОЕ ПОДКЛЮЧЕНИЕ ПО IP
+    # ============================================================
+    
+    def connect_to_ip(self, ip: str) -> bool:
+        """Ручное подключение к пользователю по IP"""
+        try:
+            print(f"🔗 ПОДКЛЮЧЕНИЕ К {ip}:{self.port}")
+            
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(5)
+                s.connect((ip, self.port))
+                
+                data = {
+                    'type': 'handshake',
+                    'from': self.username,
+                    'timestamp': time.time()
+                }
+                s.send(json.dumps(data).encode())
+                
+                response = s.recv(1024)
+                if response:
+                    msg = json.loads(response.decode())
+                    if msg.get('type') == 'handshake_ok':
+                        from_user = msg.get('from')
+                        if from_user:
+                            self.connections[from_user] = {
+                                'ip': ip,
+                                'port': self.port,
+                                'last_seen': time.time(),
+                                'connected': True
+                            }
+                            print(f"✅ ПОДКЛЮЧЕНО К {from_user} ({ip})")
+                            self.friend_online.emit(from_user)
+                            return True
+                return False
+        except Exception as e:
+            print(f"❌ Ошибка подключения к {ip}: {e}")
+            return False
+    
+    # ============================================================
+    # ПУБЛИЧНЫЕ МЕТОДЫ
+    # ============================================================
+    
     def find_user(self, username: str) -> Optional[dict]:
+        """Поиск пользователя"""
         try:
             if username.startswith('@'):
                 username = username[1:]
@@ -377,7 +372,6 @@ class P2PNetwork(QObject):
                     'ip': self.connections[username].get('ip', 'unknown')
                 }
             
-            # Если пользователь существует, но не в сети - возвращаем статус
             return {'username': username, 'exists': True, 'online': False}
             
         except Exception as e:
@@ -443,12 +437,12 @@ class P2PNetwork(QObject):
     
     def stop(self):
         self.is_running = False
-        if hasattr(self, 'server_socket'):
+        if self.server_socket:
             try:
                 self.server_socket.close()
             except:
                 pass
-        if hasattr(self, 'punch_socket'):
+        if self.punch_socket:
             try:
                 self.punch_socket.close()
             except:

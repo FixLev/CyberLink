@@ -84,6 +84,27 @@ class FriendsView(QWidget):
         add_btn.clicked.connect(self.add_friend)
         header_layout.addWidget(add_btn)
         
+        # Кнопка подключения по IP
+        ip_btn = QPushButton("🔗 Подключиться по IP")
+        ip_btn.setCursor(Qt.PointingHandCursor)
+        ip_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 170, 0, 0.12);
+                color: #ffaa00;
+                border: none;
+                border-radius: 8px;
+                padding: 6px 14px;
+                font-size: 12px;
+                font-family: 'TT Mussels', 'Arial', sans-serif;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: rgba(255, 170, 0, 0.2);
+            }
+        """)
+        ip_btn.clicked.connect(self.connect_by_ip)
+        header_layout.addWidget(ip_btn)
+        
         layout.addWidget(header)
         
         # Контент
@@ -378,7 +399,8 @@ class FriendsView(QWidget):
             is_online = self.friends_manager.is_online(username)
         elif self.network:
             # Проверяем через сеть
-            pass
+            if username in self.network.connections:
+                is_online = self.network.connections[username].get('connected', False)
         
         status_icon = "🟢" if is_online else "⚪"
         
@@ -438,6 +460,59 @@ class FriendsView(QWidget):
         layout.addWidget(remove_btn)
         
         return item
+    
+    def connect_by_ip(self):
+        """Ручное подключение к пользователю по IP"""
+        if not self.network:
+            self.show_error("Сеть не доступна")
+            return
+        
+        dialog = CyberDialog(self, "Подключение по IP", width=350, height=180)
+        
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setSpacing(15)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        label = QLabel("Введите IP адрес пользователя:")
+        label.setStyleSheet("color: #f5f5f5; font-size: 14px; font-family: 'TT Mussels', 'Arial', sans-serif;")
+        layout.addWidget(label)
+        
+        ip_input = QLineEdit()
+        ip_input.setPlaceholderText("176.112.224.188")
+        ip_input.setStyleSheet("""
+            QLineEdit {
+                background: rgba(30, 30, 48, 0.6);
+                color: #f5f5f5;
+                border: 1px solid rgba(79, 195, 247, 0.15);
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 14px;
+                font-family: 'TT Mussels', 'Arial', sans-serif;
+            }
+            QLineEdit:focus {
+                border-color: rgba(79, 195, 247, 0.4);
+            }
+        """)
+        layout.addWidget(ip_input)
+        
+        layout.addStretch()
+        
+        dialog.set_content(content)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            ip = ip_input.text().strip()
+            if not ip:
+                return
+            
+            print(f"🔗 РУЧНОЕ ПОДКЛЮЧЕНИЕ К {ip}")
+            
+            success = self.network.connect_to_ip(ip)
+            if success:
+                self.show_success(f"Подключение к {ip} установлено!")
+                self.load_friends()
+            else:
+                self.show_error(f"Не удалось подключиться к {ip}\n\nПроверьте:\n- IP адрес правильный\n- Удалённый пользователь запущен\n- Порт 3333 открыт")
     
     def add_friend(self):
         dialog = CyberDialog(self, "Добавить друга")
@@ -532,7 +607,7 @@ class FriendsView(QWidget):
                         from src.core.user_manager import UserManager
                         um = UserManager()
                         if um.user_exists(target_username):
-                            self.show_error(f"Пользователь {target_username} найден локально, но не активен в сети.\nЗапустите CyberLink на его устройстве и убедитесь, что оба компьютера в одной сети.")
+                            self.show_error(f"Пользователь {target_username} найден локально, но не активен в сети.\n\n💡 Попробуйте:\n1. Подключиться по IP\n2. Убедитесь, что пользователь запущен")
                         else:
                             self.show_error(f"Пользователь {target_username} не найден в сети")
                         return
