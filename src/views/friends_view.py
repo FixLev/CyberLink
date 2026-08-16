@@ -33,6 +33,11 @@ class FriendsView(QWidget):
             self.friends_manager.friend_removed.connect(self.load_friends)
             self.friends_manager.friend_request_received.connect(self.load_friends)
             self.friends_manager.friend_request_responded.connect(self.load_friends)
+        
+        # Если есть сеть - подключаем её сигналы
+        if self.network:
+            self.network.friend_online.connect(self.load_friends)
+            self.network.friend_offline.connect(self.load_friends)
     
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -226,8 +231,9 @@ class FriendsView(QWidget):
                 display_name = friend.get('display_name', friend_id)
                 self.friends_container.addWidget(self.create_friend_item(friend_id, display_name))
         else:
-            empty = QLabel("У вас пока нет друзей")
+            empty = QLabel("У вас пока нет друзей\n\n💫 Нажмите «Добавить друга» чтобы найти друзей")
             empty.setStyleSheet("color: #666688; font-size: 13px; font-family: 'TT Mussels', 'Arial', sans-serif; padding: 10px;")
+            empty.setAlignment(Qt.AlignCenter)
             self.friends_container.addWidget(empty)
         
         # Приветственное сообщение
@@ -254,8 +260,9 @@ class FriendsView(QWidget):
             for username in friends:
                 self.friends_container.addWidget(self.create_friend_item(username, username))
         else:
-            empty = QLabel("У вас пока нет друзей")
+            empty = QLabel("У вас пока нет друзей\n\n💫 Нажмите «Добавить друга» чтобы найти друзей")
             empty.setStyleSheet("color: #666688; font-size: 13px; font-family: 'TT Mussels', 'Arial', sans-serif; padding: 10px;")
+            empty.setAlignment(Qt.AlignCenter)
             self.friends_container.addWidget(empty)
         
         profile = self.profile_manager.get_profile()
@@ -369,6 +376,10 @@ class FriendsView(QWidget):
         is_online = False
         if self.friends_manager:
             is_online = self.friends_manager.is_online(username)
+        elif self.network:
+            # Проверяем через сеть
+            pass
+        
         status_icon = "🟢" if is_online else "⚪"
         
         avatar = QLabel("👤")
@@ -514,12 +525,20 @@ class FriendsView(QWidget):
                 
                 # Проверяем существование пользователя в сети
                 if self.network:
+                    print(f"🔍 Проверка существования пользователя {target_username} в сети...")
                     user_info = self.network.find_user(target_username)
                     if not user_info:
-                        self.show_error(f"Пользователь {target_username} не найден в сети")
+                        # Проверяем локальный реестр
+                        from src.core.user_manager import UserManager
+                        um = UserManager()
+                        if um.user_exists(target_username):
+                            self.show_error(f"Пользователь {target_username} найден локально, но не активен в сети.\nЗапустите CyberLink на его устройстве.")
+                        else:
+                            self.show_error(f"Пользователь {target_username} не найден в сети")
                         return
                     print(f"✅ Пользователь {target_username} найден в сети")
                 
+                # Отправляем заявку
                 if self.friends_manager.send_friend_request(target_username, msg_input.text().strip()):
                     self.show_success(f"Заявка {target_username} отправлена!")
                     self.load_friends()

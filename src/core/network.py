@@ -1,5 +1,5 @@
 # src/core/network.py
-# P2P сеть - только между активными собеседниками
+# P2P сеть - с разными портами для разных пользователей
 
 import json
 import time
@@ -7,6 +7,7 @@ import socket
 import threading
 import os
 import hashlib
+import random
 from typing import Optional, Dict
 from PyQt5.QtCore import QObject, pyqtSignal
 
@@ -15,13 +16,13 @@ class P2PNetwork(QObject):
     """P2P сеть - соединения только с активными собеседниками"""
     
     # Сигналы
-    friend_request_received = pyqtSignal(str, str, str)  # (from_id, message, display_name)
-    friend_request_response = pyqtSignal(str, bool)  # (from_id, accepted)
-    message_received = pyqtSignal(str, dict)  # (chat_id, message)
-    friend_online = pyqtSignal(str)  # (friend_id)
-    friend_offline = pyqtSignal(str)  # (friend_id)
-    history_requested = pyqtSignal(str)  # (from_id)
-    history_received = pyqtSignal(str, list)  # (from_id, history)
+    friend_request_received = pyqtSignal(str, str, str)
+    friend_request_response = pyqtSignal(str, bool)
+    message_received = pyqtSignal(str, dict)
+    friend_online = pyqtSignal(str)
+    friend_offline = pyqtSignal(str)
+    history_requested = pyqtSignal(str)
+    history_received = pyqtSignal(str, list)
     
     def __init__(self, username: str):
         super().__init__()
@@ -29,17 +30,18 @@ class P2PNetwork(QObject):
         self.is_running = False
         
         # Активные соединения
-        self.active_connections: Dict[str, dict] = {}  # peer_id -> {ip, port, last_ping}
-        
-        # Очередь сообщений для оффлайн
+        self.active_connections: Dict[str, dict] = {}
         self.pending_messages: Dict[str, list] = {}
         
         # Локальные данные
         self.local_ip = self._get_local_ip()
-        self.port = 6881
+        self.port = self._find_free_port()
         
         # Ключи (упрощенные для демо)
         self.public_key = hashlib.sha256(username.encode()).digest()[:16]
+        
+        # Реестр пользователей (локальный кэш)
+        self.user_cache = {}
         
         self.start_network()
     
@@ -50,6 +52,20 @@ class P2PNetwork(QObject):
                 return s.getsockname()[0]
         except:
             return "127.0.0.1"
+    
+    def _find_free_port(self) -> int:
+        """Поиск свободного порта"""
+        # Начинаем с 6881, но если занят - ищем дальше
+        start_port = 6881
+        for port in range(start_port, start_port + 100):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(('', port))
+                    return port
+            except:
+                continue
+        # Если ничего не нашли - случайный порт
+        return random.randint(10000, 60000)
     
     def start_network(self):
         """Запуск сети"""
@@ -66,7 +82,12 @@ class P2PNetwork(QObject):
         self.process_thread = threading.Thread(target=self._process_loop, daemon=True)
         self.process_thread.start()
         
-        print(f"🚀 P2P сеть запущена для @{self.username} на порту {self.port}")
+        # Запускаем обновление реестра
+        self.registry_thread = threading.Thread(target=self._registry_loop, daemon=True)
+        self.registry_thread.start()
+        
+        print(f"🚀 P2P сеть запущена для {self.username} на порту {self.port}")
+        print(f"   🌐 IP: {self.local_ip}")
     
     def _run_server(self):
         """Сервер для приема сообщений"""
@@ -104,17 +125,14 @@ class P2PNetwork(QObject):
         """Обработка очереди сообщений"""
         while self.is_running:
             try:
-                # Отправляем накопившиеся сообщения
                 for peer_id, messages in list(self.pending_messages.items()):
                     if peer_id in self.active_connections:
                         for msg in messages:
                             self._send_direct(peer_id, msg)
                         self.pending_messages[peer_id] = []
                 
-                # Проверяем активные соединения (пинг)
                 for peer_id in list(self.active_connections.keys()):
                     if time.time() - self.active_connections[peer_id].get('last_ping', 0) > 30:
-                        # Пробуем пинг
                         if not self._ping_peer(peer_id):
                             del self.active_connections[peer_id]
                             self.friend_offline.emit(peer_id)
@@ -123,6 +141,76 @@ class P2PNetwork(QObject):
             except Exception as e:
                 print(f"⚠️ Ошибка в цикле обработки: {e}")
                 time.sleep(2)
+    
+    def _registry_loop(self):
+        """Обновление локального реестра пользователей"""
+        while self.is_running:
+            try:
+                # Обновляем информацию о себе
+                from src.core.user_manager import UserManager
+                um = UserManager()
+                if um.user_exists(self.username):
+                    # Сохраняем информацию о себе в кэш
+                    self.user_cache[self.username] = {
+                        'username': self.username,
+                        'ip': self.local_ip,
+                        'port': self.port,
+                        'online': True,
+                        'last_seen': time.time()
+                    }
+                
+                # Получаем список всех пользователей
+                all_users = um.get_all_users()
+                for user in all_users:
+                    if user != self.username and user not in self.user_cache:
+                        # Пробуем найти пользователя в сети
+                        self._discover_user(user)
+                
+                time.sleep(10)
+            except Exception as e:
+                print(f"⚠️ Ошибка обновления реестра: {e}")
+                time.sleep(10)
+    
+    def _discover_user(self, username: str):
+        """Обнаружение пользователя в сети"""
+        try:
+            # Пробуем разные порты
+            for port in range(6881, 6891):
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.settimeout(0.5)
+                        s.connect((self.local_ip, port))
+                        # Отправляем запрос на идентификацию
+                        ping_data = {
+                            'type': 'discover',
+                            'from': self.username,
+                            'to': username,
+                            'timestamp': time.time()
+                        }
+                        s.send(json.dumps(ping_data).encode())
+                        # Ждём ответ
+                        response = s.recv(1024)
+                        if response:
+                            data = json.loads(response.decode())
+                            if data.get('type') == 'discover_response' and data.get('from') == username:
+                                self.user_cache[username] = {
+                                    'username': username,
+                                    'ip': self.local_ip,
+                                    'port': port,
+                                    'online': True,
+                                    'last_seen': time.time()
+                                }
+                                self.active_connections[username] = {
+                                    'ip': self.local_ip,
+                                    'last_ping': time.time()
+                                }
+                                print(f"✅ Обнаружен пользователь {username} на порту {port}")
+                                self.friend_online.emit(username)
+                                return
+                except:
+                    continue
+        except Exception as e:
+            pass
     
     def _process_incoming_message(self, data: dict, from_ip: str = None):
         """Обработка входящего сообщения"""
@@ -139,9 +227,36 @@ class P2PNetwork(QObject):
                     'ip': from_ip or data.get('ip', ''),
                     'last_ping': time.time()
                 }
+                print(f"📡 Новое соединение от {from_id}")
                 self.friend_online.emit(from_id)
             else:
                 self.active_connections[from_id]['last_ping'] = time.time()
+            
+            # Обрабатываем discovery
+            if msg_type == 'discover':
+                # Ответ на запрос обнаружения
+                if data.get('to') == self.username:
+                    response = {
+                        'type': 'discover_response',
+                        'from': self.username,
+                        'to': from_id,
+                        'timestamp': time.time()
+                    }
+                    self._send_direct(from_id, response)
+                return
+            
+            if msg_type == 'discover_response':
+                # Обнаружен пользователь
+                if from_id not in self.user_cache:
+                    self.user_cache[from_id] = {
+                        'username': from_id,
+                        'ip': from_ip,
+                        'online': True,
+                        'last_seen': time.time()
+                    }
+                    print(f"✅ Обнаружен пользователь {from_id}")
+                    self.friend_online.emit(from_id)
+                return
             
             if msg_type == 'friend_request':
                 self.friend_request_received.emit(
@@ -170,12 +285,10 @@ class P2PNetwork(QObject):
                 self.history_received.emit(from_id, history)
             
             elif msg_type == 'ping':
-                # Ответ на пинг
                 response = {'type': 'pong', 'from': self.username, 'to': from_id}
                 self._send_direct(from_id, response)
             
             elif msg_type == 'pong':
-                # Обновляем статус
                 self.friend_online.emit(from_id)
                 
         except Exception as e:
@@ -194,7 +307,23 @@ class P2PNetwork(QObject):
                         s.send(json.dumps(data).encode())
                         return True
             
-            # Если нет активного соединения - сохраняем в очередь
+            # Если нет активного соединения - пробуем найти порт
+            for port in range(6881, 6891):
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.settimeout(1)
+                        s.connect((self.local_ip, port))
+                        s.send(json.dumps(data).encode())
+                        # Сохраняем порт для будущих соединений
+                        self.active_connections[peer_id] = {
+                            'ip': self.local_ip,
+                            'last_ping': time.time()
+                        }
+                        return True
+                except:
+                    continue
+            
+            # Сохраняем в очередь
             if peer_id not in self.pending_messages:
                 self.pending_messages[peer_id] = []
             self.pending_messages[peer_id].append(data)
@@ -202,7 +331,6 @@ class P2PNetwork(QObject):
             
         except Exception as e:
             print(f"⚠️ Ошибка отправки {peer_id}: {e}")
-            # Сохраняем в очередь
             if peer_id not in self.pending_messages:
                 self.pending_messages[peer_id] = []
             self.pending_messages[peer_id].append(data)
@@ -219,17 +347,25 @@ class P2PNetwork(QObject):
     def find_user(self, username: str) -> Optional[dict]:
         """Поиск пользователя в сети"""
         try:
-            # Убираем @ если есть
             if username.startswith('@'):
                 username = username[1:]
             
-            print(f"🔍 Поиск пользователя {username} в сети...")
+            print(f"🔍 Поиск пользователя {username}...")
+            
+            # Проверяем кэш
+            if username in self.user_cache:
+                print(f"✅ Пользователь {username} найден в кэше")
+                return self.user_cache[username]
             
             # Проверяем локальный реестр
             from src.core.user_manager import UserManager
             um = UserManager()
             if um.user_exists(username):
                 print(f"✅ Пользователь {username} найден локально")
+                # Пробуем обнаружить пользователя
+                self._discover_user(username)
+                if username in self.user_cache:
+                    return self.user_cache[username]
                 return {'username': username, 'exists': True, 'local': True}
             
             # Проверяем активные соединения
@@ -251,27 +387,22 @@ class P2PNetwork(QObject):
             'last_ping': time.time()
         }
         self.friend_online.emit(peer_id)
-        
-        # Отправляем пинг для подтверждения
         self._ping_peer(peer_id)
     
     def send_friend_request(self, target: str, message: str = "") -> bool:
         """Отправка заявки"""
-        # Убираем @ если есть
         if target.startswith('@'):
             target = target[1:]
         
         print(f"📨 Отправка заявки пользователю {target}...")
         
-        # Проверяем, существует ли пользователь
         user_info = self.find_user(target)
         if not user_info:
             print(f"❌ Пользователь {target} не найден")
             return False
         
-        # Если пользователь локальный, но это не мы
         if user_info.get('local') and target != self.username:
-            print(f"❌ Пользователь {target} не зарегистрирован в сети")
+            print(f"❌ Пользователь {target} не активен в сети")
             return False
         
         print(f"✅ Пользователь {target} найден, отправляем заявку...")
@@ -286,7 +417,6 @@ class P2PNetwork(QObject):
     
     def respond_friend_request(self, target: str, accepted: bool) -> bool:
         """Ответ на заявку"""
-        # Убираем @ если есть
         if target.startswith('@'):
             target = target[1:]
         
