@@ -1,5 +1,5 @@
 # src/core/profile_manager.py
-# Управление профилем пользователя (БЕЗ @, С ШИФРОВАНИЕМ АВАТАРОК)
+# Управление профилем пользователя (БЕЗ @, С ШИФРОВАНИЕМ)
 
 import json
 import os
@@ -40,6 +40,7 @@ class ProfileManager:
             if self.password:
                 self.storage = EncryptedStorage(self.username, self.password)
             else:
+                # Создаём с временным паролем для совместимости
                 self.storage = EncryptedStorage(self.username, "temp_password")
         return self.storage
     
@@ -58,7 +59,14 @@ class ProfileManager:
             return profile
         except Exception as e:
             print(f"⚠️ Ошибка загрузки профиля: {e}")
-            return self._default_profile()
+            # Если ошибка - создаём новый профиль
+            profile = self._default_profile()
+            try:
+                storage = self._get_storage()
+                storage.save('profile.json', profile)
+            except:
+                pass
+            return profile
     
     def save_profile(self, profile: dict):
         """Сохранение профиля (зашифровано)"""
@@ -97,7 +105,7 @@ class ProfileManager:
             "occupation": "",
             "company": "",
             "gender": "Не указан",
-            "has_avatar": False,  # Флаг наличия аватарки
+            "has_avatar": False,
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
         }

@@ -1,5 +1,5 @@
 # src/core/encrypted_storage.py
-# Шифрованное хранилище (БЕЗ @) - ДОБАВЛЕНЫ МЕТОДЫ ДЛЯ АВАТАРОК
+# Шифрованное хранилище (БЕЗ @)
 
 import os
 import json
@@ -63,10 +63,10 @@ class EncryptedStorage:
         """Сохранение зашифрованного JSON файла"""
         try:
             json_data = json.dumps(data, indent=2, ensure_ascii=False)
-            encrypted = self._encrypt(json_data.encode())
+            encrypted = self._encrypt(json_data.encode('utf-8'))
             filepath = os.path.join(self.data_dir, filename)
             with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(base64.b64encode(encrypted).decode())
+                f.write(base64.b64encode(encrypted).decode('ascii'))
             print(f"💾 Сохранён зашифрованный файл: {filename}")
             return True
         except Exception as e:
@@ -90,7 +90,7 @@ class EncryptedStorage:
             if not decrypted:
                 print(f"⚠️ Не удалось расшифровать {filename}")
                 return {}
-            return json.loads(decrypted.decode())
+            return json.loads(decrypted.decode('utf-8'))
         except json.JSONDecodeError as e:
             print(f"⚠️ Ошибка JSON в {filename}: {e}")
             return {}
