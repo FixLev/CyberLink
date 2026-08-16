@@ -5,6 +5,7 @@ import re
 import json
 import hashlib
 import secrets
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import Tuple, Optional, Dict, List
@@ -19,6 +20,9 @@ class UserManager:
         
         # Файл со списком всех пользователей
         self.users_file = self.data_dir.parent / "users_registry.json"
+        
+        # Загружаем реестр
+        self.registry = self._load_registry()
     
     def _load_registry(self) -> Dict:
         """Загрузка реестра пользователей"""
@@ -30,10 +34,14 @@ class UserManager:
                 return {"users": {}}
         return {"users": {}}
     
-    def _save_registry(self, registry: Dict):
+    def _save_registry(self):
         """Сохранение реестра пользователей"""
-        with open(self.users_file, 'w', encoding='utf-8') as f:
-            json.dump(registry, f, indent=2, ensure_ascii=False)
+        try:
+            with open(self.users_file, 'w', encoding='utf-8') as f:
+                json.dump(self.registry, f, indent=2, ensure_ascii=False)
+            print(f"💾 Реестр сохранён: {list(self.registry['users'].keys())}")
+        except Exception as e:
+            print(f"❌ Ошибка сохранения реестра: {e}")
     
     def validate_username(self, username: str) -> Tuple[bool, str]:
         """Проверка валидности имени пользователя"""
@@ -61,7 +69,7 @@ class UserManager:
         if username.isdigit():
             return False, "Имя не может состоять только из цифр"
         
-        return True, username  # Возвращаем очищенное имя
+        return True, username
     
     def _create_profile(self, username: str):
         """Создание профиля пользователя"""
@@ -81,6 +89,7 @@ class UserManager:
             "occupation": "",
             "company": "",
             "gender": "Не указан",
+            "has_avatar": False,
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
         }
@@ -123,6 +132,8 @@ class UserManager:
         }
         with open(user_dir / "privacy.json", 'w', encoding='utf-8') as f:
             json.dump(privacy, f, indent=2, ensure_ascii=False)
+        
+        print(f"📁 Создан профиль для {username}")
     
     def register_user(self, username: str, password: str) -> Tuple[bool, str]:
         """Регистрация нового пользователя"""
@@ -136,11 +147,10 @@ class UserManager:
         valid, result = self.validate_username(username)
         if not valid:
             return False, result
-        username = result  # Используем очищенное имя
+        username = result
         
         # Проверяем, не занят ли логин
-        registry = self._load_registry()
-        if username in registry["users"]:
+        if username in self.registry["users"]:
             return False, f"Логин {username} уже занят"
         
         # Проверяем пароль
@@ -157,16 +167,17 @@ class UserManager:
         ).hex()
         
         # Сохраняем пользователя в реестр
-        registry["users"][username] = {
+        self.registry["users"][username] = {
             "created_at": datetime.now().isoformat(),
             "salt": salt,
             "password_hash": password_hash,
         }
-        self._save_registry(registry)
+        self._save_registry()
         
         # Создаём профиль и все файлы
         self._create_profile(username)
         
+        print(f"✅ Пользователь {username} зарегистрирован")
         return True, f"Пользователь {username} успешно зарегистрирован!"
     
     def login_user(self, username: str, password: str) -> Tuple[bool, str]:
@@ -177,11 +188,10 @@ class UserManager:
         if username.startswith('@'):
             username = username[1:]
         
-        registry = self._load_registry()
-        if username not in registry["users"]:
+        if username not in self.registry["users"]:
             return False, f"Пользователь {username} не найден"
         
-        user_data = registry["users"][username]
+        user_data = self.registry["users"][username]
         salt = user_data["salt"]
         stored_hash = user_data["password_hash"]
         
@@ -196,6 +206,7 @@ class UserManager:
         if password_hash != stored_hash:
             return False, "Неверный пароль"
         
+        print(f"✅ Вход выполнен для {username}")
         return True, f"Добро пожаловать в CyberLink, {username}!"
     
     def user_exists(self, username: str) -> bool:
@@ -203,10 +214,67 @@ class UserManager:
         username = username.strip()
         if username.startswith('@'):
             username = username[1:]
-        registry = self._load_registry()
-        return username in registry["users"]
+        return username in self.registry["users"]
     
     def get_all_users(self) -> List[str]:
         """Получение списка всех пользователей"""
-        registry = self._load_registry()
-        return list(registry["users"].keys())
+        return list(self.registry["users"].keys())
+    
+    def create_session(self, username: str) -> str:
+        """Создание сессионного токена для автоматического входа"""
+        token = secrets.token_urlsafe(32)
+        session_file = self.data_dir.parent / "session.json"
+        
+        session_data = {}
+        if session_file.exists():
+            try:
+                with open(session_file, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
+            except:
+                pass
+        
+        session_data[username] = {
+            "token": token,
+            "created_at": datetime.now().isoformat(),
+        }
+        
+        with open(session_file, 'w', encoding='utf-8') as f:
+            json.dump(session_data, f, indent=2, ensure_ascii=False)
+        
+        return token
+    
+    def validate_session(self, token: str) -> Optional[str]:
+        """Проверка сессионного токена"""
+        session_file = self.data_dir.parent / "session.json"
+        if not session_file.exists():
+            return None
+        
+        try:
+            with open(session_file, 'r', encoding='utf-8') as f:
+                session_data = json.load(f)
+            
+            for username, data in session_data.items():
+                if data.get("token") == token:
+                    return username
+        except:
+            pass
+        
+        return None
+    
+    def clear_session(self, username: str):
+        """Очистка сессии пользователя"""
+        session_file = self.data_dir.parent / "session.json"
+        if not session_file.exists():
+            return
+        
+        try:
+            with open(session_file, 'r', encoding='utf-8') as f:
+                session_data = json.load(f)
+            
+            if username in session_data:
+                del session_data[username]
+            
+            with open(session_file, 'w', encoding='utf-8') as f:
+                json.dump(session_data, f, indent=2, ensure_ascii=False)
+        except:
+            pass

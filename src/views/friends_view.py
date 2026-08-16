@@ -285,7 +285,7 @@ class FriendsView(QWidget):
         avatar.setStyleSheet("font-size: 24px;")
         top_row.addWidget(avatar)
         
-        name = QLabel(f"@{username}")
+        name = QLabel(f"{username}")
         name.setStyleSheet("color: #f5f5f5; font-size: 14px; font-weight: bold; font-family: 'TT Mussels', 'Arial', sans-serif;")
         top_row.addWidget(name)
         
@@ -486,74 +486,95 @@ class FriendsView(QWidget):
         dialog.set_content(content)
         
         if dialog.exec_() == QDialog.Accepted:
-            username = input_field.text().strip().lstrip('@')
-            if not username:
+            target_username = input_field.text().strip()
+            
+            # Убираем @ если пользователь его ввёл
+            if target_username.startswith('@'):
+                target_username = target_username[1:]
+            
+            if not target_username:
                 return
             
-            if username == self.username:
+            if target_username == self.username:
                 self.show_error("Нельзя добавить самого себя!")
                 return
             
-            # Если есть friends_manager - используем его
+            # Проверяем через friends_manager
             if self.friends_manager:
-                if self.friends_manager.is_friend(username):
-                    self.show_error(f"@{username} уже в друзьях!")
+                if self.friends_manager.is_friend(target_username):
+                    self.show_error(f"{target_username} уже в друзьях!")
                     return
-                if self.friends_manager.send_friend_request(username, msg_input.text().strip()):
-                    self.show_success(f"Заявка @{username} отправлена!")
+                
+                # Проверяем, не отправлена ли уже заявка
+                pending = self.friends_manager.get_pending_requests()
+                for req in pending:
+                    if req.get('from') == target_username:
+                        self.show_error(f"Заявка от {target_username} уже ожидает!")
+                        return
+                
+                # Проверяем существование пользователя в сети
+                if self.network:
+                    user_info = self.network.find_user(target_username)
+                    if not user_info:
+                        self.show_error(f"Пользователь {target_username} не найден в сети")
+                        return
+                    print(f"✅ Пользователь {target_username} найден в сети")
+                
+                if self.friends_manager.send_friend_request(target_username, msg_input.text().strip()):
+                    self.show_success(f"Заявка {target_username} отправлена!")
                     self.load_friends()
                 else:
-                    self.show_error(f"Не удалось отправить заявку @{username}")
+                    self.show_error(f"Не удалось отправить заявку {target_username}")
             else:
                 # Старый способ через ProfileManager
                 contacts = self.profile_manager.get_contacts()
-                if username in contacts.get("contacts", []):
-                    self.show_error(f"@{username} уже в друзьях!")
+                if target_username in contacts.get("contacts", []):
+                    self.show_error(f"{target_username} уже в друзьях!")
                     return
-                if username in contacts.get("pending", []):
-                    self.show_error(f"Заявка @{username} уже отправлена!")
+                if target_username in contacts.get("pending", []):
+                    self.show_error(f"Заявка {target_username} уже отправлена!")
                     return
                 
-                if self.profile_manager.add_contact(username):
+                if self.profile_manager.add_contact(target_username):
                     welcome_msg = msg_input.text().strip()
                     if welcome_msg:
                         contacts = self.profile_manager.get_contacts()
                         if "welcome_messages" not in contacts:
                             contacts["welcome_messages"] = {}
-                        contacts["welcome_messages"][username] = welcome_msg
+                        contacts["welcome_messages"][target_username] = welcome_msg
                         with open(self.profile_manager.contacts_file, 'w', encoding='utf-8') as f:
                             json.dump(contacts, f, indent=2, ensure_ascii=False)
                     
-                    self.show_success(f"Заявка @{username} отправлена!")
+                    self.show_success(f"Заявка {target_username} отправлена!")
                     self.load_friends()
                 else:
-                    self.show_error(f"Не удалось отправить заявку @{username}")
+                    self.show_error(f"Не удалось отправить заявку {target_username}")
     
     def accept_friend(self, username):
         if self.friends_manager:
             if self.friends_manager.accept_friend_request(username):
-                self.show_success(f"@{username} добавлен в друзья!")
+                self.show_success(f"{username} добавлен в друзья!")
                 self.load_friends()
             else:
-                self.show_error(f"Не удалось принять заявку от @{username}")
+                self.show_error(f"Не удалось принять заявку от {username}")
         else:
             if self.profile_manager.accept_contact(username):
-                self.show_success(f"@{username} добавлен в друзья!")
+                self.show_success(f"{username} добавлен в друзья!")
                 self.load_friends()
             else:
-                self.show_error(f"Не удалось принять заявку от @{username}")
+                self.show_error(f"Не удалось принять заявку от {username}")
     
     def reject_friend(self, username):
         reply = QMessageBox.question(
             self,
             "Отклонить заявку",
-            f"Вы уверены, что хотите отклонить заявку от @{username}?",
+            f"Вы уверены, что хотите отклонить заявку от {username}?",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
             if self.friends_manager:
                 if self.friends_manager.reject_friend_request(username):
-                    self.show_success(f"Заявка от @{username} отклонена")
+                    self.show_success(f"Заявка от {username} отклонена")
                     self.load_friends()
             else:
                 contacts = self.profile_manager.get_contacts()
@@ -561,24 +582,24 @@ class FriendsView(QWidget):
                     contacts["pending"].remove(username)
                     with open(self.profile_manager.contacts_file, 'w', encoding='utf-8') as f:
                         json.dump(contacts, f, indent=2, ensure_ascii=False)
-                    self.show_success(f"Заявка от @{username} отклонена")
+                    self.show_success(f"Заявка от {username} отклонена")
                     self.load_friends()
     
     def remove_friend(self, username):
         reply = QMessageBox.question(
             self,
             "Удалить друга",
-            f"Вы уверены, что хотите удалить @{username} из друзей?",
+            f"Вы уверены, что хотите удалить {username} из друзей?",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
             if self.friends_manager:
                 if self.friends_manager.remove_friend(username):
-                    self.show_success(f"@{username} удалён из друзей")
+                    self.show_success(f"{username} удалён из друзей")
                     self.load_friends()
             else:
                 if self.profile_manager.remove_contact(username):
-                    self.show_success(f"@{username} удалён из друзей")
+                    self.show_success(f"{username} удалён из друзей")
                     self.load_friends()
     
     def open_chat(self, username):

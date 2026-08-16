@@ -217,16 +217,32 @@ class P2PNetwork(QObject):
             return False
     
     def find_user(self, username: str) -> Optional[dict]:
-        """Поиск пользователя (проверяем существование)"""
-        # Для демо - проверяем, есть ли в публичном списке
-        from src.core.user_manager import UserManager
-        um = UserManager()
-        if um.user_exists(username):
-            return {
-                'username': username,
-                'exists': True
-            }
-        return None
+        """Поиск пользователя в сети"""
+        try:
+            # Убираем @ если есть
+            if username.startswith('@'):
+                username = username[1:]
+            
+            print(f"🔍 Поиск пользователя {username} в сети...")
+            
+            # Проверяем локальный реестр
+            from src.core.user_manager import UserManager
+            um = UserManager()
+            if um.user_exists(username):
+                print(f"✅ Пользователь {username} найден локально")
+                return {'username': username, 'exists': True, 'local': True}
+            
+            # Проверяем активные соединения
+            if username in self.active_connections:
+                print(f"✅ Пользователь {username} в активных соединениях")
+                return {'username': username, 'exists': True, 'active': True}
+            
+            print(f"❌ Пользователь {username} не найден")
+            return None
+            
+        except Exception as e:
+            print(f"⚠️ Ошибка поиска {username}: {e}")
+            return None
     
     def connect_to_peer(self, peer_id: str, ip: str):
         """Установка соединения с пиром"""
@@ -241,10 +257,24 @@ class P2PNetwork(QObject):
     
     def send_friend_request(self, target: str, message: str = "") -> bool:
         """Отправка заявки"""
+        # Убираем @ если есть
+        if target.startswith('@'):
+            target = target[1:]
+        
+        print(f"📨 Отправка заявки пользователю {target}...")
+        
+        # Проверяем, существует ли пользователь
         user_info = self.find_user(target)
         if not user_info:
-            print(f"❌ Пользователь @{target} не найден")
+            print(f"❌ Пользователь {target} не найден")
             return False
+        
+        # Если пользователь локальный, но это не мы
+        if user_info.get('local') and target != self.username:
+            print(f"❌ Пользователь {target} не зарегистрирован в сети")
+            return False
+        
+        print(f"✅ Пользователь {target} найден, отправляем заявку...")
         
         data = {
             'type': 'friend_request',
@@ -256,6 +286,10 @@ class P2PNetwork(QObject):
     
     def respond_friend_request(self, target: str, accepted: bool) -> bool:
         """Ответ на заявку"""
+        # Убираем @ если есть
+        if target.startswith('@'):
+            target = target[1:]
+        
         data = {
             'type': 'friend_response',
             'from': self.username,
