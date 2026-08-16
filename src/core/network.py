@@ -1,5 +1,5 @@
 # src/core/network.py
-# P2P сеть - С ЛОКАЛЬНЫМ РЕЕСТРОМ IP
+# P2P сеть - КАК RADMIN/HAMACHI (все видят всех)
 
 import json
 import time
@@ -11,7 +11,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 
 class P2PNetwork(QObject):
-    """P2P сеть - с локальным реестром IP"""
+    """P2P сеть - как Radmin (все пользователи в общем реестре)"""
     
     # Сигналы
     friend_request_received = pyqtSignal(str, str, str)
@@ -26,27 +26,26 @@ class P2PNetwork(QObject):
         self.is_running = False
         
         # Подключения
-        self.connections: Dict[str, dict] = {}  # username -> {ip, port, connected}
-        self.pending_requests: Dict[str, list] = {}  # username -> [messages]
+        self.connections: Dict[str, dict] = {}
+        self.pending_requests: Dict[str, list] = {}
         
         # Порт
         self.port = 3333
         self.host = ""
-        
-        # Сокет сервера
         self.server_socket = None
         
         self.local_ip = self._get_local_ip()
         
-        # Файл с IP пользователей
-        self.registry_file = os.path.join("data", "user_ips.json")
+        # ОБЩИЙ РЕЕСТР ВСЕХ ПОЛЬЗОВАТЕЛЕЙ
+        self.registry_file = os.path.join("data", "network_registry.json")
         self._load_registry()
         
-        # Сохраняем свой IP
-        self._save_my_ip()
+        # РЕГИСТРИРУЕМ СЕБЯ
+        self._register_me()
         
         print(f"🌐 IP: {self.local_ip}")
         print(f"🔌 ПОРТ: {self.port}")
+        print(f"📋 Всего пользователей в сети: {len(self.registry)}")
         
         self.start_network()
     
@@ -61,19 +60,19 @@ class P2PNetwork(QObject):
             return "127.0.0.1"
     
     def _load_registry(self):
-        """Загрузка реестра IP"""
+        """Загрузка общего реестра"""
         if os.path.exists(self.registry_file):
             try:
                 with open(self.registry_file, 'r', encoding='utf-8') as f:
                     self.registry = json.load(f)
-                print(f"📋 Загружено {len(self.registry)} IP-адресов")
+                print(f"📋 Загружен реестр: {len(self.registry)} пользователей")
                 return
             except:
                 pass
         self.registry = {}
     
     def _save_registry(self):
-        """Сохранение реестра IP"""
+        """Сохранение общего реестра"""
         try:
             os.makedirs(os.path.dirname(self.registry_file), exist_ok=True)
             with open(self.registry_file, 'w', encoding='utf-8') as f:
@@ -81,15 +80,23 @@ class P2PNetwork(QObject):
         except Exception as e:
             print(f"⚠️ Ошибка сохранения реестра: {e}")
     
-    def _save_my_ip(self):
-        """Сохранение своего IP"""
+    def _register_me(self):
+        """Регистрация себя в общем реестре"""
         self.registry[self.username] = {
             'ip': self.local_ip,
             'port': self.port,
+            'online': True,
             'last_seen': time.time()
         }
         self._save_registry()
-        print(f"💾 Сохранён IP: {self.username} -> {self.local_ip}:{self.port}")
+        print(f"✅ ЗАРЕГИСТРИРОВАН: {self.username} -> {self.local_ip}:{self.port}")
+    
+    def _unregister_me(self):
+        """Удаление себя из реестра"""
+        if self.username in self.registry:
+            del self.registry[self.username]
+            self._save_registry()
+            print(f"❌ Удалён из реестра: {self.username}")
     
     def start_network(self):
         """Запуск сети"""
@@ -106,7 +113,20 @@ class P2PNetwork(QObject):
         self.process_thread = threading.Thread(target=self._process_loop, daemon=True)
         self.process_thread.start()
         
+        # Запускаем обновление статуса
+        self.status_thread = threading.Thread(target=self._status_loop, daemon=True)
+        self.status_thread.start()
+        
         print(f"🚀 P2P сеть запущена на порту {self.port}")
+        print(f"📋 Пользователи в сети: {self._get_online_users()}")
+    
+    def _get_online_users(self) -> list:
+        """Получение списка онлайн пользователей"""
+        online = []
+        for user, data in self.registry.items():
+            if user != self.username and data.get('online', False):
+                online.append(user)
+        return online
     
     def _run_server(self):
         """Сервер для приема сообщений"""
@@ -140,8 +160,14 @@ class P2PNetwork(QObject):
                     message = json.loads(data.decode())
                     from_user = message.get('from')
                     
-                    if from_user:
-                        # Сохраняем IP отправителя
+                    if from_user and from_user != self.username:
+                        # Обновляем статус в реестре
+                        if from_user in self.registry:
+                            self.registry[from_user]['online'] = True
+                            self.registry[from_user]['last_seen'] = time.time()
+                            self._save_registry()
+                        
+                        # Сохраняем соединение
                         if from_user not in self.connections:
                             self.connections[from_user] = {
                                 'ip': addr[0],
@@ -150,14 +176,6 @@ class P2PNetwork(QObject):
                             }
                             print(f"🔗 ПОДКЛЮЧИЛСЯ {from_user} ({addr[0]})")
                             self.friend_online.emit(from_user)
-                            
-                            # Обновляем реестр
-                            self.registry[from_user] = {
-                                'ip': addr[0],
-                                'port': self.port,
-                                'last_seen': time.time()
-                            }
-                            self._save_registry()
                         
                         self._process_message(message)
                         
@@ -184,11 +202,34 @@ class P2PNetwork(QObject):
                     if time.time() - self.connections[user].get('last_seen', 0) > 60:
                         self.connections[user]['connected'] = False
                         self.friend_offline.emit(user)
+                        if user in self.registry:
+                            self.registry[user]['online'] = False
+                            self._save_registry()
                 
                 time.sleep(2)
             except Exception as e:
                 print(f"⚠️ Ошибка в цикле обработки: {e}")
                 time.sleep(2)
+    
+    def _status_loop(self):
+        """Обновление статуса в реестре"""
+        while self.is_running:
+            try:
+                # Обновляем свой статус
+                if self.username in self.registry:
+                    self.registry[self.username]['online'] = True
+                    self.registry[self.username]['last_seen'] = time.time()
+                    self._save_registry()
+                
+                # Выводим список онлайн пользователей
+                online = self._get_online_users()
+                if online:
+                    print(f"👥 Онлайн: {', '.join(online)}")
+                
+                time.sleep(30)
+            except Exception as e:
+                print(f"⚠️ Ошибка статуса: {e}")
+                time.sleep(30)
     
     def _process_message(self, data: dict):
         """Обработка входящего сообщения"""
@@ -199,7 +240,6 @@ class P2PNetwork(QObject):
             if not from_user:
                 return
             
-            # Обновляем время последнего контакта
             if from_user in self.connections:
                 self.connections[from_user]['last_seen'] = time.time()
                 self.connections[from_user]['connected'] = True
@@ -241,17 +281,7 @@ class P2PNetwork(QObject):
     def _send_direct(self, target_user: str, data: dict) -> bool:
         """Отправка данных напрямую"""
         try:
-            # Проверяем соединение
-            if target_user in self.connections:
-                ip = self.connections[target_user].get('ip')
-                if ip:
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                        s.settimeout(3)
-                        s.connect((ip, self.port))
-                        s.send(json.dumps(data).encode())
-                        return True
-            
-            # Если нет соединения, но есть IP в реестре
+            # Проверяем реестр для получения IP
             if target_user in self.registry:
                 ip = self.registry[target_user].get('ip')
                 if ip:
@@ -259,13 +289,6 @@ class P2PNetwork(QObject):
                         s.settimeout(3)
                         s.connect((ip, self.port))
                         s.send(json.dumps(data).encode())
-                        # Сохраняем соединение
-                        self.connections[target_user] = {
-                            'ip': ip,
-                            'connected': True,
-                            'last_seen': time.time()
-                        }
-                        print(f"🔗 ПОДКЛЮЧЕНО К {target_user} ({ip})")
                         return True
             
             return False
@@ -274,7 +297,7 @@ class P2PNetwork(QObject):
             return False
     
     def find_user(self, username: str) -> Optional[dict]:
-        """Поиск пользователя"""
+        """Поиск пользователя в реестре"""
         try:
             if username.startswith('@'):
                 username = username[1:]
@@ -286,77 +309,56 @@ class P2PNetwork(QObject):
                 print(f"❌ {username} НЕ СУЩЕСТВУЕТ")
                 return None
             
-            # Проверяем, есть ли IP в реестре
+            # Проверяем реестр сети
             if username in self.registry:
                 ip = self.registry[username].get('ip')
-                if ip:
-                    print(f"✅ Найден IP для {username}: {ip}")
-                    # Добавляем в соединения
-                    if username not in self.connections:
-                        self.connections[username] = {
-                            'ip': ip,
-                            'connected': False,
-                            'last_seen': 0
-                        }
-                    return {'username': username, 'exists': True, 'ip': ip}
-            
-            # Если IP не найден, но пользователь существует
-            print(f"⚠️ IP для {username} не найден, будет попытка подключения")
-            if username not in self.connections:
-                self.connections[username] = {
-                    'ip': None,
-                    'connected': False,
-                    'last_seen': 0
+                online = self.registry[username].get('online', False)
+                print(f"✅ Найден {username} в сети: IP={ip}, online={online}")
+                return {
+                    'username': username,
+                    'exists': True,
+                    'ip': ip,
+                    'online': online
                 }
             
-            return {'username': username, 'exists': True}
+            # Если пользователь есть в системе, но не в реестре
+            print(f"⚠️ {username} существует, но не в сети")
+            return {'username': username, 'exists': True, 'online': False}
             
         except Exception as e:
             print(f"⚠️ Ошибка поиска {username}: {e}")
             return None
     
     def send_friend_request(self, target: str, message: str = "") -> bool:
-        """Отправка заявки - С АВТОМАТИЧЕСКИМ ПОДКЛЮЧЕНИЕМ"""
+        """Отправка заявки"""
         if target.startswith('@'):
             target = target[1:]
         
         print(f"📨 ОТПРАВКА ЗАЯВКИ {target}")
         
-        # Проверяем существование пользователя
         user_info = self.find_user(target)
         if not user_info:
             print(f"❌ {target} НЕ НАЙДЕН")
             return False
         
-        # Если есть IP, пробуем подключиться и отправить
-        if user_info.get('ip'):
-            print(f"✅ Найден IP для {target}: {user_info['ip']}")
-            data = {
-                'type': 'friend_request',
-                'from': self.username,
-                'to': target,
-                'content': {'message': message}
-            }
-            success = self._send_direct(target, data)
-            if success:
-                print(f"✅ Заявка отправлена {target}")
-                return True
-            else:
-                print(f"⚠️ Не удалось отправить заявку {target}, сохраняем в очередь")
+        if not user_info.get('online'):
+            print(f"❌ {target} НЕ В СЕТИ (офлайн)")
+            return False
         
-        # Если нет IP или не удалось отправить - в очередь
-        if target not in self.pending_requests:
-            self.pending_requests[target] = []
-        
-        self.pending_requests[target].append({
+        data = {
             'type': 'friend_request',
             'from': self.username,
             'to': target,
             'content': {'message': message}
-        })
+        }
         
-        print(f"⏳ Заявка в очереди для {target}")
-        return True
+        success = self._send_direct(target, data)
+        if success:
+            print(f"✅ Заявка отправлена {target}")
+            return True
+        else:
+            print(f"⚠️ Не удалось отправить заявку {target}")
+            return False
     
     def respond_friend_request(self, target: str, accepted: bool) -> bool:
         """Ответ на заявку"""
@@ -369,17 +371,7 @@ class P2PNetwork(QObject):
             'to': target,
             'content': {'accepted': accepted}
         }
-        
-        # Пробуем отправить сразу
-        if target in self.connections and self.connections[target].get('connected'):
-            return self._send_direct(target, data)
-        
-        # Если нет соединения - в очередь
-        if target not in self.pending_requests:
-            self.pending_requests[target] = []
-        self.pending_requests[target].append(data)
-        
-        return True
+        return self._send_direct(target, data)
     
     def send_message(self, chat_id: str, message: dict) -> bool:
         """Отправка сообщения"""
@@ -396,19 +388,11 @@ class P2PNetwork(QObject):
                 'timestamp': time.time()
             }
         }
-        
-        if recipient in self.connections and self.connections[recipient].get('connected'):
-            return self._send_direct(recipient, data)
-        
-        # В очередь
-        if recipient not in self.pending_requests:
-            self.pending_requests[recipient] = []
-        self.pending_requests[recipient].append(data)
-        
-        return True
+        return self._send_direct(recipient, data)
     
     def stop(self):
         self.is_running = False
+        self._unregister_me()
         if self.server_socket:
             try:
                 self.server_socket.close()
