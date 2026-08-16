@@ -7,14 +7,21 @@ from PyQt5.QtWidgets import *
 
 from src.theme.colors import COLORS
 from src.core.profile_manager import ProfileManager
+from src.utils.dialogs import show_cyber_message  # ДОБАВЛЯЕМ ИМПОРТ
 
 
 class ProfileView(QWidget):
-    def __init__(self, username):
+    def __init__(self, username, friends_manager=None, network=None, password=None):
         super().__init__()
         self.username = username
-        self.profile_manager = ProfileManager(username)
+        self.friends_manager = friends_manager
+        self.network = network
+        self.password = password
+        
+        # Создаём ProfileManager с паролем
+        self.profile_manager = ProfileManager(username, password)
         self.is_editing = False
+        
         self.init_ui()
         self.load_profile()
     
@@ -87,7 +94,7 @@ class ProfileView(QWidget):
         
         layout.addWidget(header)
         
-        # Контент профиля
+        # Контент
         self.content = QScrollArea()
         self.content.setWidgetResizable(True)
         self.content.setStyleSheet("""
@@ -104,9 +111,6 @@ class ProfileView(QWidget):
                 background: rgba(255, 255, 255, 0.1);
                 border-radius: 3px;
                 min-height: 30px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: rgba(255, 255, 255, 0.15);
             }
         """)
         
@@ -129,7 +133,7 @@ class ProfileView(QWidget):
         
         self.content_layout.addWidget(self.avatar_container)
         
-        # Кнопка изменения аватарки (в режиме редактирования)
+        # Кнопка изменения аватарки
         self.avatar_btn = QPushButton("📷 Сменить аватар")
         self.avatar_btn.setCursor(Qt.PointingHandCursor)
         self.avatar_btn.setStyleSheet("""
@@ -292,7 +296,7 @@ class ProfileView(QWidget):
         layout.addWidget(self.content)
     
     def load_profile(self):
-        """Загрузка профиля из ProfileManager"""
+        """Загрузка профиля"""
         profile = self.profile_manager.get_profile()
         
         # Отображаемое имя
@@ -347,10 +351,8 @@ class ProfileView(QWidget):
             self.save_btn.show()
             self.avatar_btn.show()
             
-            # Показываем поля ввода
             self.name_display.hide()
             self.name_input.show()
-            
             self.gender_display.hide()
             self.gender_combo.show()
             
@@ -377,10 +379,8 @@ class ProfileView(QWidget):
             self.save_btn.hide()
             self.avatar_btn.hide()
             
-            # Показываем лейблы
             self.name_display.show()
             self.name_input.hide()
-            
             self.gender_display.show()
             self.gender_combo.hide()
             
@@ -393,56 +393,28 @@ class ProfileView(QWidget):
     def save_profile(self):
         profile_data = {}
         
-        # Отображаемое имя
         display_name = self.name_input.text().strip()
         if display_name:
             profile_data["display_name"] = display_name
         
-        # Пол
         gender = self.gender_combo.currentText()
         if gender:
             profile_data["gender"] = gender
         
-        # Остальные поля
         for key, widget_data in self.info_widgets.items():
             value = widget_data['input'].text().strip()
             if value:
                 profile_data[key] = value
         
         if profile_data:
-            self.profile_manager.update_profile(profile_data)
-        
-        self.toggle_edit()
-        
-        msg = QMessageBox(self)
-        msg.setStyleSheet("""
-            QMessageBox {
-                background: rgba(10, 10, 25, 0.95);
-                color: #f5f5f5;
-            }
-            QMessageBox QLabel {
-                color: #f5f5f5;
-                font-size: 14px;
-                font-family: 'TT Mussels', 'Arial', sans-serif;
-            }
-            QMessageBox QPushButton {
-                background: rgba(79, 195, 247, 0.15);
-                color: #4fc3f7;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 16px;
-                font-size: 14px;
-                font-family: 'TT Mussels', 'Arial', sans-serif;
-                font-weight: bold;
-            }
-            QMessageBox QPushButton:hover {
-                background: rgba(79, 195, 247, 0.25);
-            }
-        """)
-        msg.setWindowTitle("Успех")
-        msg.setText("✅ Профиль сохранён!")
-        msg.setIcon(QMessageBox.Information)
-        msg.exec_()
+            success = self.profile_manager.update_profile(profile_data)
+            if success:
+                self.toggle_edit()
+                show_cyber_message(self, "Успех", "✅ Профиль сохранён!", QMessageBox.Information)
+            else:
+                show_cyber_message(self, "Ошибка", "❌ Не удалось сохранить профиль", QMessageBox.Critical)
+        else:
+            self.toggle_edit()
     
     def change_avatar(self):
         file_dialog = QFileDialog()
@@ -463,32 +435,4 @@ class ProfileView(QWidget):
                     self.avatar_label.setText("👤")
                     self.avatar_label.setStyleSheet("font-size: 80px;")
                 
-                msg = QMessageBox(self)
-                msg.setStyleSheet("""
-                    QMessageBox {
-                        background: rgba(10, 10, 25, 0.95);
-                        color: #f5f5f5;
-                    }
-                    QMessageBox QLabel {
-                        color: #f5f5f5;
-                        font-size: 14px;
-                        font-family: 'TT Mussels', 'Arial', sans-serif;
-                    }
-                    QMessageBox QPushButton {
-                        background: rgba(79, 195, 247, 0.15);
-                        color: #4fc3f7;
-                        border: none;
-                        border-radius: 8px;
-                        padding: 8px 16px;
-                        font-size: 14px;
-                        font-family: 'TT Mussels', 'Arial', sans-serif;
-                        font-weight: bold;
-                    }
-                    QMessageBox QPushButton:hover {
-                        background: rgba(79, 195, 247, 0.25);
-                    }
-                """)
-                msg.setWindowTitle("Успех")
-                msg.setText("✅ Аватар обновлён!")
-                msg.setIcon(QMessageBox.Information)
-                msg.exec_()
+                show_cyber_message(self, "Успех", "✅ Аватар обновлён!", QMessageBox.Information)

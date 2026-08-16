@@ -1,18 +1,30 @@
 # src/theme/colors.py
-# Космическая цветовая схема
+# Цветовая схема CyberLink
 
 COLORS = {
-    'bg_primary': '#0a0a12',
-    'bg_secondary': '#12121e',
-    'bg_card': '#1a1a28',
-    'bg_input': '#1e1e30',
-    'bg_hover': '#2a2a3e',
-    'glass_bg': 'rgba(26, 26, 40, 0.6)',
-    'glass_border': 'rgba(79, 195, 247, 0.15)',
-    'accent_primary': '#4fc3f7',
-    'accent_secondary': '#81d4fa',
-    'text_primary': '#f5f5f5',
-    'text_secondary': '#b0b0c0',
-    'text_dim': '#6a6a7a',
-    'online': '#4fc3f7',
+    'background': {
+        'primary': '#0a0a19',
+        'secondary': '#0d0d2b',
+        'tertiary': '#0f0f35',
+    },
+    'text': {
+        'primary': '#f5f5f5',
+        'secondary': '#b0b0c0',
+        'tertiary': '#666688',
+    },
+    'accent': {
+        'primary': '#4fc3f7',
+        'secondary': '#81d4fa',
+        'tertiary': '#7b2ffc',
+    },
+    'status': {
+        'online': '#00ff88',
+        'offline': '#666688',
+        'away': '#ffaa00',
+        'busy': '#ff2d55',
+    },
+    'glass': {
+        'background': 'rgba(10, 10, 25, 0.12)',
+        'border': 'rgba(79, 195, 247, 0.06)',
+    }
 }

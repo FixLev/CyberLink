@@ -1,9 +1,5 @@
-# core/__init__.py
-# CyberLink - Core package
-
-from .database import Database
-from .network import P2PNetwork
+# src/core/__init__.py
+from .encrypted_storage import EncryptedStorage
 from .user_manager import UserManager
-from .message_sync import MessageSync
-
-__all__ = ['Database', 'P2PNetwork', 'UserManager', 'MessageSync']
+from .network import P2PNetwork
+from .friends_manager import FriendsManager

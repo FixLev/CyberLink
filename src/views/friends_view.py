@@ -12,12 +12,27 @@ from src.utils.dialogs import CyberDialog, show_cyber_message
 
 
 class FriendsView(QWidget):
-    def __init__(self, username):
+    def __init__(self, username, friends_manager=None, network=None):
         super().__init__()
         self.username = username
-        self.profile_manager = ProfileManager(username)
+        self.friends_manager = friends_manager
+        self.network = network
+        
+        # Для обратной совместимости
+        if friends_manager is None:
+            self.profile_manager = ProfileManager(username)
+        else:
+            self.profile_manager = None
+        
         self.init_ui()
         self.load_friends()
+        
+        # Подключаем сигналы если есть friends_manager
+        if self.friends_manager:
+            self.friends_manager.friend_added.connect(self.load_friends)
+            self.friends_manager.friend_removed.connect(self.load_friends)
+            self.friends_manager.friend_request_received.connect(self.load_friends)
+            self.friends_manager.friend_request_responded.connect(self.load_friends)
     
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -94,14 +109,16 @@ class FriendsView(QWidget):
         # Секция: Входящие заявки
         self.add_section("📨 Входящие заявки")
         self.pending_container = QVBoxLayout()
+        self.pending_container.setSpacing(8)
         self.content_layout.addLayout(self.pending_container)
         
         # Секция: Мои друзья
         self.add_section("👥 Мои друзья")
         self.friends_container = QVBoxLayout()
+        self.friends_container.setSpacing(8)
         self.content_layout.addLayout(self.friends_container)
         
-        # Секция: Приветственное сообщение для входящих заявок
+        # Секция: Приветственное сообщение
         self.add_section("💬 Приветственное сообщение")
         self.add_welcome_message()
         
@@ -170,43 +187,82 @@ class FriendsView(QWidget):
     
     def load_friends(self):
         # Очищаем контейнеры
-        for i in reversed(range(self.pending_container.count())):
-            widget = self.pending_container.itemAt(i).widget()
-            if widget:
-                widget.setParent(None)
-        for i in reversed(range(self.friends_container.count())):
-            widget = self.friends_container.itemAt(i).widget()
-            if widget:
-                widget.setParent(None)
+        self._clear_layout(self.pending_container)
+        self._clear_layout(self.friends_container)
         
-        contacts = self.profile_manager.get_contacts()
+        # Если есть friends_manager - используем его
+        if self.friends_manager:
+            self._load_friends_from_manager()
+        else:
+            self._load_friends_from_profile()
+    
+    def _clear_layout(self, layout):
+        """Очистка layout от всех виджетов"""
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+    
+    def _load_friends_from_manager(self):
+        """Загрузка из FriendsManager"""
+        pending = self.friends_manager.get_pending_requests()
+        friends = self.friends_manager.get_friends_list()
         
-        # Входящие заявки
-        pending = contacts.get("pending", [])
         if pending:
-            for username in pending:
-                self.pending_container.addWidget(self.create_pending_item(username))
+            for req in pending:
+                from_id = req.get('from')
+                if from_id:
+                    self.pending_container.addWidget(self.create_pending_item(from_id, req))
         else:
             empty = QLabel("Нет входящих заявок")
             empty.setStyleSheet("color: #666688; font-size: 13px; font-family: 'TT Mussels', 'Arial', sans-serif; padding: 10px;")
             self.pending_container.addWidget(empty)
         
-        # Друзья
-        friends = contacts.get("contacts", [])
         if friends:
-            for username in friends:
-                self.friends_container.addWidget(self.create_friend_item(username))
+            for friend in friends:
+                friend_id = friend.get('id')
+                display_name = friend.get('display_name', friend_id)
+                self.friends_container.addWidget(self.create_friend_item(friend_id, display_name))
         else:
             empty = QLabel("У вас пока нет друзей")
             empty.setStyleSheet("color: #666688; font-size: 13px; font-family: 'TT Mussels', 'Arial', sans-serif; padding: 10px;")
             self.friends_container.addWidget(empty)
         
         # Приветственное сообщение
+        if self.profile_manager:
+            profile = self.profile_manager.get_profile()
+            welcome = profile.get("welcome_message", "")
+            self.welcome_input.setText(welcome)
+    
+    def _load_friends_from_profile(self):
+        """Загрузка из ProfileManager (старый способ)"""
+        contacts = self.profile_manager.get_contacts()
+        
+        pending = contacts.get("pending", [])
+        if pending:
+            for username in pending:
+                self.pending_container.addWidget(self.create_pending_item(username, {'from': username}))
+        else:
+            empty = QLabel("Нет входящих заявок")
+            empty.setStyleSheet("color: #666688; font-size: 13px; font-family: 'TT Mussels', 'Arial', sans-serif; padding: 10px;")
+            self.pending_container.addWidget(empty)
+        
+        friends = contacts.get("contacts", [])
+        if friends:
+            for username in friends:
+                self.friends_container.addWidget(self.create_friend_item(username, username))
+        else:
+            empty = QLabel("У вас пока нет друзей")
+            empty.setStyleSheet("color: #666688; font-size: 13px; font-family: 'TT Mussels', 'Arial', sans-serif; padding: 10px;")
+            self.friends_container.addWidget(empty)
+        
         profile = self.profile_manager.get_profile()
         welcome = profile.get("welcome_message", "")
         self.welcome_input.setText(welcome)
     
-    def create_pending_item(self, username):
+    def create_pending_item(self, username, request=None):
         item = QFrame()
         item.setStyleSheet("""
             QFrame {
@@ -220,9 +276,10 @@ class FriendsView(QWidget):
         """)
         
         layout = QVBoxLayout(item)
+        layout.setSpacing(5)
         
-        # Верхняя строка: аватар + имя
         top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
         
         avatar = QLabel("👤")
         avatar.setStyleSheet("font-size: 24px;")
@@ -242,7 +299,7 @@ class FriendsView(QWidget):
                 color: #00ff88;
                 border: none;
                 border-radius: 6px;
-                padding: 6px 14px;
+                padding: 5px 14px;
                 font-size: 12px;
                 font-family: 'TT Mussels', 'Arial', sans-serif;
                 font-weight: bold;
@@ -262,7 +319,7 @@ class FriendsView(QWidget):
                 color: #ff2d55;
                 border: none;
                 border-radius: 6px;
-                padding: 6px 14px;
+                padding: 5px 14px;
                 font-size: 12px;
                 font-family: 'TT Mussels', 'Arial', sans-serif;
                 font-weight: bold;
@@ -276,17 +333,23 @@ class FriendsView(QWidget):
         
         layout.addLayout(top_row)
         
-        # Приветственное сообщение (если есть)
-        profile = self.profile_manager.get_profile()
-        welcome = profile.get("welcome_message", "")
-        if welcome:
-            msg_label = QLabel(f"💬 {welcome}")
+        # Приветственное сообщение
+        msg = request.get('message', '') if request else ''
+        if msg:
+            msg_label = QLabel(f"💬 {msg}")
             msg_label.setStyleSheet("color: #8888aa; font-size: 12px; font-family: 'TT Mussels', 'Arial', sans-serif; padding-left: 40px;")
             layout.addWidget(msg_label)
+        elif self.profile_manager:
+            profile = self.profile_manager.get_profile()
+            welcome = profile.get("welcome_message", "")
+            if welcome:
+                msg_label = QLabel(f"💬 {welcome}")
+                msg_label.setStyleSheet("color: #8888aa; font-size: 12px; font-family: 'TT Mussels', 'Arial', sans-serif; padding-left: 40px;")
+                layout.addWidget(msg_label)
         
         return item
     
-    def create_friend_item(self, username):
+    def create_friend_item(self, username, display_name=None):
         item = QFrame()
         item.setStyleSheet("""
             QFrame {
@@ -302,12 +365,24 @@ class FriendsView(QWidget):
         layout = QHBoxLayout(item)
         layout.setContentsMargins(10, 5, 10, 5)
         
+        # Статус
+        is_online = False
+        if self.friends_manager:
+            is_online = self.friends_manager.is_online(username)
+        status_icon = "🟢" if is_online else "⚪"
+        
         avatar = QLabel("👤")
         avatar.setStyleSheet("font-size: 24px;")
         layout.addWidget(avatar)
         
-        name = QLabel(f"@{username}")
-        name.setStyleSheet("color: #f5f5f5; font-size: 14px; font-weight: bold; font-family: 'TT Mussels', 'Arial', sans-serif;")
+        name_text = display_name if display_name else username
+        name = QLabel(f"{status_icon} {name_text}")
+        name.setStyleSheet(f"""
+            color: {'#00ff88' if is_online else '#f5f5f5'};
+            font-size: 14px;
+            font-weight: bold;
+            font-family: 'TT Mussels', 'Arial', sans-serif;
+        """)
         layout.addWidget(name)
         
         layout.addStretch()
@@ -320,7 +395,7 @@ class FriendsView(QWidget):
                 color: #4fc3f7;
                 border: none;
                 border-radius: 6px;
-                padding: 6px 14px;
+                padding: 5px 14px;
                 font-size: 12px;
                 font-family: 'TT Mussels', 'Arial', sans-serif;
                 font-weight: bold;
@@ -333,6 +408,7 @@ class FriendsView(QWidget):
         layout.addWidget(chat_btn)
         
         remove_btn = QPushButton("🗑️")
+        remove_btn.setFixedSize(28, 28)
         remove_btn.setCursor(Qt.PointingHandCursor)
         remove_btn.setStyleSheet("""
             QPushButton {
@@ -358,13 +434,14 @@ class FriendsView(QWidget):
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setSpacing(15)
+        layout.setContentsMargins(0, 0, 0, 0)
         
-        label = QLabel("Введите имя пользователя (@никнейм):")
+        label = QLabel("Введите имя пользователя:")
         label.setStyleSheet("color: #f5f5f5; font-size: 14px; font-family: 'TT Mussels', 'Arial', sans-serif;")
         layout.addWidget(label)
         
         input_field = QLineEdit()
-        input_field.setPlaceholderText("@username")
+        input_field.setPlaceholderText("username")
         input_field.setStyleSheet("""
             QLineEdit {
                 background: rgba(30, 30, 48, 0.6);
@@ -381,7 +458,6 @@ class FriendsView(QWidget):
         """)
         layout.addWidget(input_field)
         
-        # Приветственное сообщение для заявки
         msg_label = QLabel("Приветственное сообщение (необязательно):")
         msg_label.setStyleSheet("color: #8888aa; font-size: 13px; font-family: 'TT Mussels', 'Arial', sans-serif;")
         layout.addWidget(msg_label)
@@ -405,6 +481,8 @@ class FriendsView(QWidget):
         """)
         layout.addWidget(msg_input)
         
+        layout.addStretch()
+        
         dialog.set_content(content)
         
         if dialog.exec_() == QDialog.Accepted:
@@ -416,38 +494,54 @@ class FriendsView(QWidget):
                 self.show_error("Нельзя добавить самого себя!")
                 return
             
-            contacts = self.profile_manager.get_contacts()
-            if username in contacts.get("contacts", []):
-                self.show_error(f"@{username} уже в друзьях!")
-                return
-            if username in contacts.get("pending", []):
-                self.show_error(f"Заявка @{username} уже отправлена!")
-                return
-            
-            # Отправляем заявку с приветственным сообщением
-            if self.profile_manager.add_contact(username):
-                # Сохраняем приветственное сообщение для этого пользователя
-                welcome_msg = msg_input.text().strip()
-                if welcome_msg:
-                    # Сохраняем в контактах
-                    contacts = self.profile_manager.get_contacts()
-                    if "welcome_messages" not in contacts:
-                        contacts["welcome_messages"] = {}
-                    contacts["welcome_messages"][username] = welcome_msg
-                    with open(self.profile_manager.contacts_file, 'w', encoding='utf-8') as f:
-                        json.dump(contacts, f, indent=2, ensure_ascii=False)
-                
-                self.show_success(f"Заявка @{username} отправлена!")
-                self.load_friends()
+            # Если есть friends_manager - используем его
+            if self.friends_manager:
+                if self.friends_manager.is_friend(username):
+                    self.show_error(f"@{username} уже в друзьях!")
+                    return
+                if self.friends_manager.send_friend_request(username, msg_input.text().strip()):
+                    self.show_success(f"Заявка @{username} отправлена!")
+                    self.load_friends()
+                else:
+                    self.show_error(f"Не удалось отправить заявку @{username}")
             else:
-                self.show_error(f"Не удалось отправить заявку @{username}")
+                # Старый способ через ProfileManager
+                contacts = self.profile_manager.get_contacts()
+                if username in contacts.get("contacts", []):
+                    self.show_error(f"@{username} уже в друзьях!")
+                    return
+                if username in contacts.get("pending", []):
+                    self.show_error(f"Заявка @{username} уже отправлена!")
+                    return
+                
+                if self.profile_manager.add_contact(username):
+                    welcome_msg = msg_input.text().strip()
+                    if welcome_msg:
+                        contacts = self.profile_manager.get_contacts()
+                        if "welcome_messages" not in contacts:
+                            contacts["welcome_messages"] = {}
+                        contacts["welcome_messages"][username] = welcome_msg
+                        with open(self.profile_manager.contacts_file, 'w', encoding='utf-8') as f:
+                            json.dump(contacts, f, indent=2, ensure_ascii=False)
+                    
+                    self.show_success(f"Заявка @{username} отправлена!")
+                    self.load_friends()
+                else:
+                    self.show_error(f"Не удалось отправить заявку @{username}")
     
     def accept_friend(self, username):
-        if self.profile_manager.accept_contact(username):
-            self.show_success(f"@{username} добавлен в друзья!")
-            self.load_friends()
+        if self.friends_manager:
+            if self.friends_manager.accept_friend_request(username):
+                self.show_success(f"@{username} добавлен в друзья!")
+                self.load_friends()
+            else:
+                self.show_error(f"Не удалось принять заявку от @{username}")
         else:
-            self.show_error(f"Не удалось принять заявку от @{username}")
+            if self.profile_manager.accept_contact(username):
+                self.show_success(f"@{username} добавлен в друзья!")
+                self.load_friends()
+            else:
+                self.show_error(f"Не удалось принять заявку от @{username}")
     
     def reject_friend(self, username):
         reply = QMessageBox.question(
@@ -457,13 +551,18 @@ class FriendsView(QWidget):
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            contacts = self.profile_manager.get_contacts()
-            if username in contacts.get("pending", []):
-                contacts["pending"].remove(username)
-                with open(self.profile_manager.contacts_file, 'w', encoding='utf-8') as f:
-                    json.dump(contacts, f, indent=2, ensure_ascii=False)
-                self.show_success(f"Заявка от @{username} отклонена")
-                self.load_friends()
+            if self.friends_manager:
+                if self.friends_manager.reject_friend_request(username):
+                    self.show_success(f"Заявка от @{username} отклонена")
+                    self.load_friends()
+            else:
+                contacts = self.profile_manager.get_contacts()
+                if username in contacts.get("pending", []):
+                    contacts["pending"].remove(username)
+                    with open(self.profile_manager.contacts_file, 'w', encoding='utf-8') as f:
+                        json.dump(contacts, f, indent=2, ensure_ascii=False)
+                    self.show_success(f"Заявка от @{username} отклонена")
+                    self.load_friends()
     
     def remove_friend(self, username):
         reply = QMessageBox.question(
@@ -473,18 +572,26 @@ class FriendsView(QWidget):
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            if self.profile_manager.remove_contact(username):
-                self.show_success(f"@{username} удалён из друзей")
-                self.load_friends()
+            if self.friends_manager:
+                if self.friends_manager.remove_friend(username):
+                    self.show_success(f"@{username} удалён из друзей")
+                    self.load_friends()
+            else:
+                if self.profile_manager.remove_contact(username):
+                    self.show_success(f"@{username} удалён из друзей")
+                    self.load_friends()
     
     def open_chat(self, username):
         main_window = self.window()
         if hasattr(main_window, 'switch_mode'):
             main_window.switch_mode('chats')
+            if hasattr(main_window, 'chat_page'):
+                main_window.chat_page.open_chat(username)
     
     def save_welcome_message(self):
         text = self.welcome_input.text().strip()
-        self.profile_manager.update_profile({"welcome_message": text[:100]})
+        if self.profile_manager:
+            self.profile_manager.update_profile({"welcome_message": text[:100]})
     
     def show_success(self, message):
         show_cyber_message(self, "Успех", f"✅ {message}", QMessageBox.Information)

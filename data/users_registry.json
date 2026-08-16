@@ -1,9 +1,0 @@
-{
-  "users": {
-    "Electric_Eye": {
-      "created_at": "2026-08-15T17:59:36.667897",
-      "salt": "103b4154870dee5baac9f0c5f3b1180b",
-      "password_hash": "073aa81954dcb77e7afb99bac629189d87f416e8e22d7996167ef00a6dd9d2bc"
-    }
-  }
-}

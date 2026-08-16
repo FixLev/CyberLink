@@ -1,5 +1,5 @@
 # src/views/settings_view.py
-# Страница настроек (без курсора)
+# Страница настроек
 
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
@@ -11,11 +11,20 @@ from src.utils.dialogs import CyberDialog, get_dialog_style, show_cyber_message
 
 
 class SettingsView(QWidget):
-    def __init__(self, username=None, main_window=None):
+    def __init__(self, username=None, main_window=None, friends_manager=None, network=None, password=None):
         super().__init__()
         self.username = username
         self.main_window = main_window
-        self.profile_manager = ProfileManager(username) if username else None
+        self.friends_manager = friends_manager
+        self.network = network
+        self.password = password
+        
+        # Создаём ProfileManager с паролем
+        if username and password:
+            self.profile_manager = ProfileManager(username, password)
+        else:
+            self.profile_manager = ProfileManager(username) if username else None
+        
         self.init_ui()
     
     def init_ui(self):
@@ -212,13 +221,13 @@ class SettingsView(QWidget):
         combo.setCurrentIndex(levels.get(current_level, 1))
         layout.addWidget(combo)
         
-        selected_label = QLabel("Выбранные пользователи (через пробел, с @):")
+        selected_label = QLabel("Выбранные пользователи (через пробел):")
         selected_label.setStyleSheet("color: #8888aa; font-size: 13px; font-family: 'TT Mussels', 'Arial', sans-serif;")
         selected_label.hide()
         layout.addWidget(selected_label)
         
         selected_input = QLineEdit()
-        selected_input.setPlaceholderText("@user1 @user2 @user3")
+        selected_input.setPlaceholderText("user1 user2 user3")
         selected_input.setText(" ".join(current_selected))
         selected_input.setStyleSheet("""
             QLineEdit {
@@ -260,10 +269,7 @@ class SettingsView(QWidget):
             selected_users = []
             if selected_text:
                 users = [u.strip() for u in selected_text.split() if u.strip()]
-                for user in users:
-                    if not user.startswith('@'):
-                        user = '@' + user
-                    selected_users.append(user)
+                selected_users = users
             
             self.profile_manager.update_privacy({
                 key: {"level": new_level, "selected": selected_users}
@@ -295,14 +301,28 @@ class SettingsView(QWidget):
         combo.setCurrentIndex(levels.get(current, 1))
         layout.addWidget(combo)
         
-        selected_label = QLabel("Выбранные пользователи (через пробел, с @):")
+        selected_label = QLabel("Выбранные пользователи (через пробел):")
         selected_label.setStyleSheet("color: #8888aa; font-size: 13px;")
         selected_label.hide()
         layout.addWidget(selected_label)
         
         selected_input = QLineEdit()
-        selected_input.setPlaceholderText("@user1 @user2 @user3")
+        selected_input.setPlaceholderText("user1 user2 user3")
         selected_input.setText(" ".join(current_selected))
+        selected_input.setStyleSheet("""
+            QLineEdit {
+                background: rgba(30, 30, 48, 0.6);
+                color: #f5f5f5;
+                border: 1px solid rgba(79, 195, 247, 0.15);
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 14px;
+                font-family: 'TT Mussels', 'Arial', sans-serif;
+            }
+            QLineEdit:focus {
+                border-color: rgba(79, 195, 247, 0.4);
+            }
+        """)
         selected_input.hide()
         layout.addWidget(selected_input)
         
@@ -329,10 +349,7 @@ class SettingsView(QWidget):
             selected_users = []
             if selected_text:
                 users = [u.strip() for u in selected_text.split() if u.strip()]
-                for user in users:
-                    if not user.startswith('@'):
-                        user = '@' + user
-                    selected_users.append(user)
+                selected_users = users
             
             self.profile_manager.update_privacy({
                 "last_seen": {"level": new_level, "selected": selected_users}

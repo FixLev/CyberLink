@@ -258,22 +258,27 @@ class SpaceWidget(QWidget):
 
 
 class MainView(QMainWindow):
-    def __init__(self, username, network, database):
+    def __init__(self, username, password=None, network=None, friends_manager=None, storage=None):
         super().__init__()
         self.username = username
+        self.password = password
         self.network = network
-        self.database = database
+        self.friends_manager = friends_manager
+        self.storage = storage
         self.current_mode = 'chats'
         self.drag_pos = None
         self.chat_padding = 30
         self.cursor_widget = None
         
-        self.setWindowTitle(f"CyberLink - @{username}")
+        self.setWindowTitle(f"CyberLink - {username}")
         self.setGeometry(100, 100, 1300, 800)
         self.setMinimumSize(1000, 600)
         self.setWindowFlags(Qt.FramelessWindowHint)
         
         self.init_ui()
+    
+    def set_cursor_widget(self, cursor):
+        self.cursor_widget = cursor
     
     def init_ui(self):
         # Космический фон
@@ -301,7 +306,7 @@ class MainView(QMainWindow):
         top_bar = self._create_top_bar(glass)
         main_layout.addWidget(top_bar)
         
-        # === 2. ВЫБОРКА (навигация) ===
+        # === 2. НАВИГАЦИЯ ===
         nav_bar = self._create_nav_bar()
         main_layout.addWidget(nav_bar)
         
@@ -370,12 +375,38 @@ class MainView(QMainWindow):
         self.work_area = QStackedWidget()
         content_split.addWidget(self.work_area)
         
-        # Добавляем страницы в рабочую зону
-        self.chat_page = ChatView(self.username)
-        self.friends_page = FriendsView(self.username)
-        self.profile_page = ProfileView(self.username)
-        self.settings_page = SettingsView(self.username, self)  # Передаём self для доступа к курсору
+        # === СОЗДАЁМ СТРАНИЦЫ ===
         
+        # 1. Чаты
+        self.chat_page = ChatView(self.username)
+        if hasattr(self.chat_page, 'set_managers'):
+            self.chat_page.set_managers(self.friends_manager, self.network)
+        
+        # 2. Друзья
+        self.friends_page = FriendsView(
+            self.username,
+            self.friends_manager,
+            self.network
+        )
+        
+        # 3. Профиль - передаём пароль
+        self.profile_page = ProfileView(
+            self.username,
+            self.friends_manager,
+            self.network,
+            self.password
+        )
+        
+        # 4. Настройки - передаём пароль
+        self.settings_page = SettingsView(
+            self.username,
+            self,
+            self.friends_manager,
+            self.network,
+            self.password
+        )
+        
+        # Добавляем страницы в рабочую область
         self.work_area.addWidget(self.chat_page)
         self.work_area.addWidget(self.friends_page)
         self.work_area.addWidget(self.profile_page)
@@ -399,15 +430,43 @@ class MainView(QMainWindow):
         # Заполняем чаты
         self.update_chat_list()
     
-    def set_cursor_widget(self, cursor):
-        """Установка виджета курсора"""
-        self.cursor_widget = cursor
-    
     def update_chat_list(self):
         """Обновление списка чатов"""
         self.chat_list.clear()
         
-        # Показываем сообщение о том, что чатов нет
+        # Если есть friends_manager - показываем друзей
+        if self.friends_manager:
+            friends = self.friends_manager.get_friends_list()
+            if friends:
+                for friend in friends:
+                    friend_id = friend.get('id')
+                    display_name = friend.get('display_name', friend_id)
+                    is_online = self.friends_manager.is_online(friend_id)
+                    
+                    item = QListWidgetItem()
+                    widget = QWidget()
+                    layout = QHBoxLayout(widget)
+                    layout.setContentsMargins(8, 4, 8, 4)
+                    
+                    status = "🟢" if is_online else "⚪"
+                    name = QLabel(f"{status} {display_name}")
+                    name.setStyleSheet(f"""
+                        color: {'#00ff88' if is_online else '#8888aa'};
+                        font-size: 14px;
+                        font-family: 'TT Mussels', 'Arial', sans-serif;
+                    """)
+                    layout.addWidget(name)
+                    layout.addStretch()
+                    
+                    item.setSizeHint(widget.sizeHint())
+                    item.setData(Qt.UserRole, friend_id)
+                    self.chat_list.addItem(item)
+                    self.chat_list.setItemWidget(item, widget)
+                
+                self.chat_list.itemClicked.connect(self.on_chat_selected)
+                return
+        
+        # Если нет друзей - показываем пустое состояние
         empty_widget = QWidget()
         empty_layout = QVBoxLayout(empty_widget)
         empty_layout.setAlignment(Qt.AlignCenter)
@@ -426,7 +485,7 @@ class MainView(QMainWindow):
         empty_text.setAlignment(Qt.AlignCenter)
         empty_layout.addWidget(empty_text)
         
-        empty_sub = QLabel("Начните новый диалог или\nдобавьте контакт")
+        empty_sub = QLabel("Добавьте друзей, чтобы начать общение")
         empty_sub.setStyleSheet("""
             color: #666688;
             font-size: 13px;
@@ -439,6 +498,13 @@ class MainView(QMainWindow):
         item.setSizeHint(empty_widget.sizeHint())
         self.chat_list.addItem(item)
         self.chat_list.setItemWidget(item, empty_widget)
+    
+    def on_chat_selected(self, item):
+        """Обработка выбора чата"""
+        friend_id = item.data(Qt.UserRole)
+        if friend_id and hasattr(self, 'chat_page'):
+            self.switch_mode('chats')
+            self.chat_page.open_chat(friend_id)
     
     def _create_top_bar(self, parent):
         bar = QFrame(parent)
@@ -575,14 +641,13 @@ class MainView(QMainWindow):
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(12, 0, 12, 0)
         
-        # Сохраняем ссылку на лейбл статуса для обновления из настроек
         self.status_label = QLabel("🟢 Онлайн")
         self.status_label.setStyleSheet("color: #4fc3f7; font-size: 12px; font-family: 'TT Mussels', 'Arial', sans-serif;")
         layout.addWidget(self.status_label)
         
         layout.addStretch()
         
-        user = QLabel(f"🌟 @{self.username}")
+        user = QLabel(f"🌟 {self.username}")
         user.setStyleSheet("color: #b0b0c0; font-size: 12px; font-family: 'TT Mussels', 'Arial', sans-serif;")
         layout.addWidget(user)
         
