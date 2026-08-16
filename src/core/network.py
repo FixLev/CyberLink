@@ -1,5 +1,5 @@
 # src/core/network.py
-# P2P сеть - с разными портами для разных пользователей
+# P2P сеть - с реальным поиском пользователей в сети
 
 import json
 import time
@@ -13,7 +13,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 
 class P2PNetwork(QObject):
-    """P2P сеть - соединения только с активными собеседниками"""
+    """P2P сеть - с поиском пользователей в сети"""
     
     # Сигналы
     friend_request_received = pyqtSignal(str, str, str)
@@ -40,8 +40,11 @@ class P2PNetwork(QObject):
         # Ключи (упрощенные для демо)
         self.public_key = hashlib.sha256(username.encode()).digest()[:16]
         
-        # Реестр пользователей (локальный кэш)
-        self.user_cache = {}
+        # Кэш найденных пользователей
+        self.discovered_users: Dict[str, dict] = {}
+        
+        # Список известных портов для сканирования
+        self.known_ports = [6881, 6882, 6883, 6884, 6885]
         
         self.start_network()
     
@@ -55,16 +58,13 @@ class P2PNetwork(QObject):
     
     def _find_free_port(self) -> int:
         """Поиск свободного порта"""
-        # Начинаем с 6881, но если занят - ищем дальше
-        start_port = 6881
-        for port in range(start_port, start_port + 100):
+        for port in range(6881, 6900):
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.bind(('', port))
                     return port
             except:
                 continue
-        # Если ничего не нашли - случайный порт
         return random.randint(10000, 60000)
     
     def start_network(self):
@@ -82,9 +82,9 @@ class P2PNetwork(QObject):
         self.process_thread = threading.Thread(target=self._process_loop, daemon=True)
         self.process_thread.start()
         
-        # Запускаем обновление реестра
-        self.registry_thread = threading.Thread(target=self._registry_loop, daemon=True)
-        self.registry_thread.start()
+        # Запускаем сканирование сети
+        self.scan_thread = threading.Thread(target=self._scan_network, daemon=True)
+        self.scan_thread.start()
         
         print(f"🚀 P2P сеть запущена для {self.username} на порту {self.port}")
         print(f"   🌐 IP: {self.local_ip}")
@@ -142,75 +142,66 @@ class P2PNetwork(QObject):
                 print(f"⚠️ Ошибка в цикле обработки: {e}")
                 time.sleep(2)
     
-    def _registry_loop(self):
-        """Обновление локального реестра пользователей"""
+    def _scan_network(self):
+        """Сканирование сети для поиска пользователей"""
         while self.is_running:
             try:
-                # Обновляем информацию о себе
-                from src.core.user_manager import UserManager
-                um = UserManager()
-                if um.user_exists(self.username):
-                    # Сохраняем информацию о себе в кэш
-                    self.user_cache[self.username] = {
-                        'username': self.username,
-                        'ip': self.local_ip,
-                        'port': self.port,
-                        'online': True,
-                        'last_seen': time.time()
-                    }
+                # Сканируем локальную сеть на наличие других пользователей
+                ip_parts = self.local_ip.split('.')
+                base_ip = '.'.join(ip_parts[:3])
                 
-                # Получаем список всех пользователей
-                all_users = um.get_all_users()
-                for user in all_users:
-                    if user != self.username and user not in self.user_cache:
-                        # Пробуем найти пользователя в сети
-                        self._discover_user(user)
+                # Сканируем только несколько IP для скорости
+                for i in range(1, 255, 5):  # Проверяем каждые 5 IP для скорости
+                    if not self.is_running:
+                        break
+                    ip = f"{base_ip}.{i}"
+                    if ip == self.local_ip:
+                        continue
+                    
+                    # Проверяем известные порты
+                    for port in self.known_ports:
+                        if not self.is_running:
+                            break
+                        try:
+                            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                                s.settimeout(0.3)
+                                s.connect((ip, port))
+                                # Отправляем запрос на идентификацию
+                                ping_data = {
+                                    'type': 'discover',
+                                    'from': self.username,
+                                    'timestamp': time.time()
+                                }
+                                s.send(json.dumps(ping_data).encode())
+                                # Ждём ответ
+                                response = s.recv(1024)
+                                if response:
+                                    data = json.loads(response.decode())
+                                    if data.get('type') == 'discover_response':
+                                        user = data.get('from')
+                                        if user and user != self.username:
+                                            self.discovered_users[user] = {
+                                                'username': user,
+                                                'ip': ip,
+                                                'port': port,
+                                                'last_seen': time.time()
+                                            }
+                                            if user not in self.active_connections:
+                                                self.active_connections[user] = {
+                                                    'ip': ip,
+                                                    'last_ping': time.time()
+                                                }
+                                            print(f"✅ Обнаружен пользователь {user} на {ip}:{port}")
+                                            self.friend_online.emit(user)
+                        except:
+                            continue
                 
-                time.sleep(10)
+                # Спим между сканированиями
+                time.sleep(30)
+                
             except Exception as e:
-                print(f"⚠️ Ошибка обновления реестра: {e}")
-                time.sleep(10)
-    
-    def _discover_user(self, username: str):
-        """Обнаружение пользователя в сети"""
-        try:
-            # Пробуем разные порты
-            for port in range(6881, 6891):
-                try:
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                        s.settimeout(0.5)
-                        s.connect((self.local_ip, port))
-                        # Отправляем запрос на идентификацию
-                        ping_data = {
-                            'type': 'discover',
-                            'from': self.username,
-                            'to': username,
-                            'timestamp': time.time()
-                        }
-                        s.send(json.dumps(ping_data).encode())
-                        # Ждём ответ
-                        response = s.recv(1024)
-                        if response:
-                            data = json.loads(response.decode())
-                            if data.get('type') == 'discover_response' and data.get('from') == username:
-                                self.user_cache[username] = {
-                                    'username': username,
-                                    'ip': self.local_ip,
-                                    'port': port,
-                                    'online': True,
-                                    'last_seen': time.time()
-                                }
-                                self.active_connections[username] = {
-                                    'ip': self.local_ip,
-                                    'last_ping': time.time()
-                                }
-                                print(f"✅ Обнаружен пользователь {username} на порту {port}")
-                                self.friend_online.emit(username)
-                                return
-                except:
-                    continue
-        except Exception as e:
-            pass
+                print(f"⚠️ Ошибка сканирования сети: {e}")
+                time.sleep(30)
     
     def _process_incoming_message(self, data: dict, from_ip: str = None):
         """Обработка входящего сообщения"""
@@ -235,23 +226,20 @@ class P2PNetwork(QObject):
             # Обрабатываем discovery
             if msg_type == 'discover':
                 # Ответ на запрос обнаружения
-                if data.get('to') == self.username:
-                    response = {
-                        'type': 'discover_response',
-                        'from': self.username,
-                        'to': from_id,
-                        'timestamp': time.time()
-                    }
-                    self._send_direct(from_id, response)
+                response = {
+                    'type': 'discover_response',
+                    'from': self.username,
+                    'timestamp': time.time()
+                }
+                self._send_direct(from_id, response, from_ip)
                 return
             
             if msg_type == 'discover_response':
                 # Обнаружен пользователь
-                if from_id not in self.user_cache:
-                    self.user_cache[from_id] = {
+                if from_id not in self.discovered_users:
+                    self.discovered_users[from_id] = {
                         'username': from_id,
                         'ip': from_ip,
-                        'online': True,
                         'last_seen': time.time()
                     }
                     print(f"✅ Обнаружен пользователь {from_id}")
@@ -286,7 +274,7 @@ class P2PNetwork(QObject):
             
             elif msg_type == 'ping':
                 response = {'type': 'pong', 'from': self.username, 'to': from_id}
-                self._send_direct(from_id, response)
+                self._send_direct(from_id, response, from_ip)
             
             elif msg_type == 'pong':
                 self.friend_online.emit(from_id)
@@ -294,10 +282,10 @@ class P2PNetwork(QObject):
         except Exception as e:
             print(f"❌ Ошибка обработки сообщения: {e}")
     
-    def _send_direct(self, peer_id: str, data: dict) -> bool:
+    def _send_direct(self, peer_id: str, data: dict, target_ip: str = None) -> bool:
         """Отправка данных напрямую"""
         try:
-            # Ищем пользователя в активных соединениях
+            # Если знаем IP из активного соединения
             if peer_id in self.active_connections:
                 ip = self.active_connections[peer_id].get('ip')
                 if ip:
@@ -307,21 +295,39 @@ class P2PNetwork(QObject):
                         s.send(json.dumps(data).encode())
                         return True
             
-            # Если нет активного соединения - пробуем найти порт
-            for port in range(6881, 6891):
-                try:
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                        s.settimeout(1)
-                        s.connect((self.local_ip, port))
-                        s.send(json.dumps(data).encode())
-                        # Сохраняем порт для будущих соединений
-                        self.active_connections[peer_id] = {
-                            'ip': self.local_ip,
-                            'last_ping': time.time()
-                        }
-                        return True
-                except:
-                    continue
+            # Если передали IP
+            if target_ip:
+                for port in self.known_ports:
+                    try:
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                            s.settimeout(1)
+                            s.connect((target_ip, port))
+                            s.send(json.dumps(data).encode())
+                            self.active_connections[peer_id] = {
+                                'ip': target_ip,
+                                'last_ping': time.time()
+                            }
+                            return True
+                    except:
+                        continue
+            
+            # Если есть в discovered_users
+            if peer_id in self.discovered_users:
+                ip = self.discovered_users[peer_id].get('ip')
+                if ip:
+                    for port in self.known_ports:
+                        try:
+                            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                                s.settimeout(1)
+                                s.connect((ip, port))
+                                s.send(json.dumps(data).encode())
+                                self.active_connections[peer_id] = {
+                                    'ip': ip,
+                                    'last_ping': time.time()
+                                }
+                                return True
+                        except:
+                            continue
             
             # Сохраняем в очередь
             if peer_id not in self.pending_messages:
@@ -345,7 +351,7 @@ class P2PNetwork(QObject):
             return False
     
     def find_user(self, username: str) -> Optional[dict]:
-        """Поиск пользователя в сети"""
+        """Поиск пользователя в сети - СКАНИРУЕТ ВСЮ СЕТЬ"""
         try:
             if username.startswith('@'):
                 username = username[1:]
@@ -353,27 +359,71 @@ class P2PNetwork(QObject):
             print(f"🔍 Поиск пользователя {username}...")
             
             # Проверяем кэш
-            if username in self.user_cache:
+            if username in self.discovered_users:
                 print(f"✅ Пользователь {username} найден в кэше")
-                return self.user_cache[username]
-            
-            # Проверяем локальный реестр
-            from src.core.user_manager import UserManager
-            um = UserManager()
-            if um.user_exists(username):
-                print(f"✅ Пользователь {username} найден локально")
-                # Пробуем обнаружить пользователя
-                self._discover_user(username)
-                if username in self.user_cache:
-                    return self.user_cache[username]
-                return {'username': username, 'exists': True, 'local': True}
+                return self.discovered_users[username]
             
             # Проверяем активные соединения
             if username in self.active_connections:
                 print(f"✅ Пользователь {username} в активных соединениях")
                 return {'username': username, 'exists': True, 'active': True}
             
-            print(f"❌ Пользователь {username} не найден")
+            # Проверяем локальный реестр
+            from src.core.user_manager import UserManager
+            um = UserManager()
+            if not um.user_exists(username):
+                print(f"❌ Пользователь {username} не существует")
+                return None
+            
+            # СКАНИРУЕМ СЕТЬ ДЛЯ ПОИСКА ПОЛЬЗОВАТЕЛЯ
+            print(f"🔍 Сканируем сеть для поиска {username}...")
+            
+            ip_parts = self.local_ip.split('.')
+            base_ip = '.'.join(ip_parts[:3])
+            
+            # Сканируем все IP в подсети
+            for i in range(1, 255):
+                ip = f"{base_ip}.{i}"
+                if ip == self.local_ip:
+                    continue
+                
+                for port in self.known_ports:
+                    try:
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                            s.settimeout(0.3)
+                            s.connect((ip, port))
+                            # Отправляем запрос на идентификацию с указанием искомого пользователя
+                            ping_data = {
+                                'type': 'find_user',
+                                'from': self.username,
+                                'target': username,
+                                'timestamp': time.time()
+                            }
+                            s.send(json.dumps(ping_data).encode())
+                            # Ждём ответ
+                            response = s.recv(1024)
+                            if response:
+                                data = json.loads(response.decode())
+                                if data.get('type') == 'find_user_response':
+                                    found_user = data.get('username')
+                                    if found_user == username:
+                                        print(f"✅ Найден пользователь {username} на {ip}:{port}")
+                                        self.discovered_users[username] = {
+                                            'username': username,
+                                            'ip': ip,
+                                            'port': port,
+                                            'last_seen': time.time()
+                                        }
+                                        self.active_connections[username] = {
+                                            'ip': ip,
+                                            'last_ping': time.time()
+                                        }
+                                        self.friend_online.emit(username)
+                                        return self.discovered_users[username]
+                    except:
+                        continue
+            
+            print(f"❌ Пользователь {username} не найден в сети")
             return None
             
         except Exception as e:
@@ -398,11 +448,7 @@ class P2PNetwork(QObject):
         
         user_info = self.find_user(target)
         if not user_info:
-            print(f"❌ Пользователь {target} не найден")
-            return False
-        
-        if user_info.get('local') and target != self.username:
-            print(f"❌ Пользователь {target} не активен в сети")
+            print(f"❌ Пользователь {target} не найден в сети")
             return False
         
         print(f"✅ Пользователь {target} найден, отправляем заявку...")
@@ -473,6 +519,8 @@ class P2PNetwork(QObject):
         """Получение IP пира"""
         if peer_id in self.active_connections:
             return self.active_connections[peer_id].get('ip')
+        if peer_id in self.discovered_users:
+            return self.discovered_users[peer_id].get('ip')
         return None
     
     def stop(self):

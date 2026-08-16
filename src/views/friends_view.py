@@ -532,7 +532,7 @@ class FriendsView(QWidget):
                         from src.core.user_manager import UserManager
                         um = UserManager()
                         if um.user_exists(target_username):
-                            self.show_error(f"Пользователь {target_username} найден локально, но не активен в сети.\nЗапустите CyberLink на его устройстве.")
+                            self.show_error(f"Пользователь {target_username} найден локально, но не активен в сети.\nЗапустите CyberLink на его устройстве и убедитесь, что оба компьютера в одной сети.")
                         else:
                             self.show_error(f"Пользователь {target_username} не найден в сети")
                         return
