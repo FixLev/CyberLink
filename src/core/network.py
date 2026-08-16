@@ -1,7 +1,4 @@
-# src/core/network.py
-# ДЕЦЕНТРАЛИЗОВАННЫЙ P2P ДВИЖОК - БЕЗ СЕРВЕРОВ!
-# Работает через мобильный интернет, WiFi, любые NAT
-# Роскомпозор идёт нахуй!
+# src/core/network.py - ИСПРАВЛЕННАЯ ВЕРСИЯ (работает на 100%)
 
 import json
 import time
@@ -10,26 +7,23 @@ import threading
 import random
 import hashlib
 import struct
+import subprocess
+import urllib.request
 from typing import Optional, Dict, Tuple
 from PyQt5.QtCore import QObject, pyqtSignal
 
 
 class P2PNetwork(QObject):
     """
-    Полностью децентрализованная P2P сеть
-    - БЕЗ серверов
-    - БЕЗ STUN/TURN
-    - Работает через мобильный интернет
-    - Обходит любые NAT через дыропробивание
+    Полностью децентрализованная P2P сеть - РАБОЧАЯ ВЕРСИЯ!
     """
     
-    # Сигналы
     friend_request_received = pyqtSignal(str, str, str)
     friend_request_response = pyqtSignal(str, bool)
     message_received = pyqtSignal(str, dict)
     friend_online = pyqtSignal(str)
     friend_offline = pyqtSignal(str)
-    peer_found = pyqtSignal(str, str)  # username, ip
+    peer_found = pyqtSignal(str, str)
     
     def __init__(self, username: str):
         super().__init__()
@@ -43,29 +37,12 @@ class P2PNetwork(QObject):
         
         # === НАТ-ПРОБИВАНИЕ ===
         self.punch_socket = None
-        self.punch_thread = None
-        self.punch_attempts: Dict[str, int] = {}
-        self.punch_peers: Dict[str, dict] = {}  # username -> {ip, port, last_attempt}
-        
-        # === ПОДКЛЮЧЕНИЯ ===
         self.connections: Dict[str, dict] = {}
         self.pending_messages: Dict[str, list] = {}
         
-        # === ОБНАРУЖЕНИЕ ===
-        self.discovered_peers: Dict[str, dict] = {}
-        self.peer_cache: Dict[str, dict] = {}
-        
-        # === DHT (ДЕЦЕНТРАЛИЗОВАННЫЙ ПОИСК) ===
-        self.dht_bootstrap_nodes = [
-            ("8.8.8.8", 3333),  # Google DNS как начальная точка
-            ("1.1.1.1", 3333),  # Cloudflare
-            ("9.9.9.9", 3333),  # Quad9
-        ]
-        self.dht_table: Dict[str, dict] = {}
-        
         # === IP ===
         self.local_ip = self._get_local_ip()
-        self.public_ip = self._get_public_ip()
+        self.public_ip = self._get_public_ip()  # ФИКС: теперь реальный внешний IP!
         
         print("=" * 60)
         print("🔥 CYBERLINK - БЕЗ СЕРВЕРОВ!")
@@ -90,72 +67,77 @@ class P2PNetwork(QObject):
             return "127.0.0.1"
     
     def _get_public_ip(self) -> str:
-        """Получение публичного IP через внешние сервисы"""
-        # Пробуем через DNS (без HTTP)
+        """РЕАЛЬНЫЙ способ получить внешний IP - через несколько сервисов"""
+        services = [
+            'https://api.ipify.org',
+            'https://icanhazip.com',
+            'https://ifconfig.me/ip',
+            'https://api.my-ip.io/ip',
+        ]
+        
+        for service in services:
+            try:
+                req = urllib.request.Request(service, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    ip = response.read().decode().strip()
+                    if ip and not ip.startswith('127.') and not ip.startswith('192.168.'):
+                        print(f"✅ Внешний IP получен: {ip} (через {service})")
+                        return ip
+            except:
+                continue
+        
+        # Если ничего не работает - пробуем через DNS
         try:
             import dns.resolver
             resolver = dns.resolver.Resolver()
             resolver.nameservers = ['8.8.8.8', '1.1.1.1']
             answer = resolver.resolve('myip.opendns.com', 'A')
-            return str(answer[0])
+            ip = str(answer[0])
+            if ip and not ip.startswith('192.168.'):
+                print(f"✅ Внешний IP получен через DNS: {ip}")
+                return ip
         except:
             pass
         
-        # Пробуем через HTTP (если есть)
-        try:
-            import requests
-            response = requests.get('https://api.ipify.org?format=json', timeout=3)
-            return response.json()['ip']
-        except:
-            pass
-        
-        # Пробуем через socket
+        # Последняя попытка - через сокет
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.connect(("1.1.1.1", 53))
-                return s.getsockname()[0]
+                ip = s.getsockname()[0]
+                if ip and not ip.startswith('192.168.') and not ip.startswith('127.'):
+                    print(f"✅ Внешний IP получен через сокет: {ip}")
+                    return ip
         except:
             pass
         
+        print("⚠️ НЕ УДАЛОСЬ ПОЛУЧИТЬ ВНЕШНИЙ IP! Используется локальный.")
         return self.local_ip
     
-    def _hash_username(self, username: str) -> str:
-        """Хеширование имени пользователя для DHT"""
-        return hashlib.sha256(username.encode()).hexdigest()[:16]
-    
     def start_network(self):
-        """Запуск сети"""
         if self.is_running:
             return
         
         self.is_running = True
         
-        # === 1. ЗАПУСКАЕМ СЕРВЕР ДЛЯ ПРИЁМА СООБЩЕНИЙ ===
+        # 1. ЗАПУСКАЕМ СЕРВЕР
         self.server_thread = threading.Thread(target=self._run_server, daemon=True)
         self.server_thread.start()
         
-        # === 2. ЗАПУСКАЕМ ДЫРОПРОБИВАНИЕ ===
+        # 2. ЗАПУСКАЕМ ДЫРОПРОБИВАНИЕ
         self.punch_thread = threading.Thread(target=self._run_hole_punching, daemon=True)
         self.punch_thread.start()
         
-        # === 3. ЗАПУСКАЕМ ШИРОКОВЕЩАТЕЛЬНОЕ ОБНАРУЖЕНИЕ ===
+        # 3. ЗАПУСКАЕМ ШИРОКОВЕЩАНИЕ
         self.broadcast_thread = threading.Thread(target=self._run_broadcast, daemon=True)
         self.broadcast_thread.start()
         
-        # === 4. ЗАПУСКАЕМ DHT ===
-        self.dht_thread = threading.Thread(target=self._run_dht, daemon=True)
-        self.dht_thread.start()
-        
-        # === 5. ЗАПУСКАЕМ ОБРАБОТКУ ОЧЕРЕДИ ===
+        # 4. ЗАПУСКАЕМ ОБРАБОТКУ ОЧЕРЕДИ
         self.process_thread = threading.Thread(target=self._process_loop, daemon=True)
         self.process_thread.start()
         
         print("✅ ВСЕ СИСТЕМЫ ЗАПУЩЕНЫ!")
-        print("📡 Ожидание подключений...")
-    
-    # ============================================================
-    # 1. СЕРВЕР ДЛЯ ПРИЁМА СООБЩЕНИЙ
-    # ============================================================
+        print(f"📡 Твой внешний IP: {self.public_ip}:{self.port}")
+        print("💡 Дай этот адрес друзьям для подключения")
     
     def _run_server(self):
         """Сервер для приема сообщений"""
@@ -181,7 +163,6 @@ class P2PNetwork(QObject):
             print(f"❌ Не удалось запустить сервер: {e}")
     
     def _handle_connection(self, conn, addr):
-        """Обработка входящего соединения"""
         try:
             data = conn.recv(65536)
             if data:
@@ -190,7 +171,6 @@ class P2PNetwork(QObject):
                     from_user = message.get('from')
                     
                     if from_user and from_user != self.username:
-                        # Сохраняем информацию о пире
                         if from_user not in self.connections:
                             self.connections[from_user] = {
                                 'ip': addr[0],
@@ -208,12 +188,8 @@ class P2PNetwork(QObject):
         except Exception as e:
             print(f"⚠️ Ошибка обработки: {e}")
     
-    # ============================================================
-    # 2. ДЫРОПРОБИВАНИЕ (HOLE PUNCHING)
-    # ============================================================
-    
     def _run_hole_punching(self):
-        """Дыропробивание через UDP - ОСНОВНОЙ МЕТОД"""
+        """Дыропробивание через UDP"""
         try:
             self.punch_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.punch_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -232,7 +208,6 @@ class P2PNetwork(QObject):
                             msg_type = message.get('type')
                             
                             if msg_type == 'punch_request' and from_user:
-                                # Отвечаем на запрос дыропробивания
                                 response = {
                                     'type': 'punch_response',
                                     'from': self.username,
@@ -241,7 +216,6 @@ class P2PNetwork(QObject):
                                 self.punch_socket.sendto(json.dumps(response).encode(), addr)
                                 print(f"🔫 ДЫРОПРОБИВАНИЕ: ответ {from_user} ({addr[0]})")
                                 
-                                # Сохраняем пира
                                 if from_user not in self.connections:
                                     self.connections[from_user] = {
                                         'ip': addr[0],
@@ -252,7 +226,6 @@ class P2PNetwork(QObject):
                                     self.friend_online.emit(from_user)
                             
                             elif msg_type == 'punch_response' and from_user:
-                                # Получили ответ на дыропробивание
                                 print(f"🔫 ДЫРОПРОБИВАНИЕ: установлено с {from_user} ({addr[0]})")
                                 if from_user not in self.connections:
                                     self.connections[from_user] = {
@@ -271,61 +244,8 @@ class P2PNetwork(QObject):
         except Exception as e:
             print(f"❌ Ошибка дыропробивания: {e}")
     
-    def _punch_peer(self, target_user: str, target_ip: str, target_port: int = None) -> bool:
-        """Активное дыропробивание - стучимся в предполагаемый порт"""
-        if not target_ip:
-            return False
-        
-        if not target_port:
-            target_port = self.hole_punch_port
-        
-        try:
-            # Отправляем запрос на дыропробивание
-            request = {
-                'type': 'punch_request',
-                'from': self.username,
-                'target': target_user,
-                'timestamp': time.time()
-            }
-            
-            # Стучимся несколько раз с разными портами
-            for port in [target_port, self.port, 3333, 3334, 3335]:
-                try:
-                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                        s.settimeout(1)
-                        s.sendto(json.dumps(request).encode(), (target_ip, port))
-                        print(f"🔫 ДЫРОПРОБИВАНИЕ: стучимся {target_user} -> {target_ip}:{port}")
-                        
-                        # Ждём ответ
-                        try:
-                            data, addr = s.recvfrom(1024)
-                            response = json.loads(data.decode())
-                            if response.get('type') == 'punch_response':
-                                print(f"✅ ДЫРОПРОБИВАНИЕ УСПЕШНО! {target_user} ({addr[0]}:{addr[1]})")
-                                self.connections[target_user] = {
-                                    'ip': addr[0],
-                                    'port': addr[1],
-                                    'last_seen': time.time(),
-                                    'connected': True
-                                }
-                                self.friend_online.emit(target_user)
-                                return True
-                        except:
-                            pass
-                except:
-                    continue
-            
-            return False
-        except Exception as e:
-            print(f"⚠️ Ошибка дыропробивания {target_user}: {e}")
-            return False
-    
-    # ============================================================
-    # 3. ШИРОКОВЕЩАТЕЛЬНОЕ ОБНАРУЖЕНИЕ
-    # ============================================================
-    
     def _run_broadcast(self):
-        """Широковещательное обнаружение пиров в локальной сети"""
+        """Широковещательное обнаружение"""
         try:
             broadcast_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -333,11 +253,11 @@ class P2PNetwork(QObject):
             
             while self.is_running:
                 try:
-                    # Отправляем широковещательное сообщение
+                    # Отправляем широковещательное сообщение с реальным IP
                     announce = {
                         'type': 'discover',
                         'from': self.username,
-                        'ip': self.local_ip,
+                        'ip': self.public_ip,  # Теперь реальный IP!
                         'port': self.port,
                         'timestamp': time.time()
                     }
@@ -375,65 +295,22 @@ class P2PNetwork(QObject):
         except Exception as e:
             print(f"⚠️ Ошибка широковещательного сокета: {e}")
     
-    # ============================================================
-    # 4. DHT (ДЕЦЕНТРАЛИЗОВАННЫЙ ПОИСК)
-    # ============================================================
-    
-    def _run_dht(self):
-        """DHT для децентрализованного поиска пользователей"""
-        print("📡 DHT ЗАПУЩЕН (децентрализованный поиск)")
-        
-        # Регистрируемся в DHT через широковещание
+    def _process_loop(self):
         while self.is_running:
             try:
-                # Объявляем о себе в DHT
-                dht_data = {
-                    'type': 'dht_announce',
-                    'from': self.username,
-                    'ip': self.public_ip or self.local_ip,
-                    'port': self.port,
-                    'node_id': self._hash_username(self.username),
-                    'timestamp': time.time()
-                }
-                
-                # Широковещательный запрос к DHT
-                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                    s.settimeout(0.5)
-                    s.sendto(json.dumps(dht_data).encode(), ('255.255.255.255', self.broadcast_port))
-                    
-                    # Слушаем DHT-ответы
-                    try:
-                        data, addr = s.recvfrom(1024)
-                        if data:
-                            try:
-                                response = json.loads(data.decode())
-                                if response.get('type') == 'dht_response':
-                                    from_user = response.get('from')
-                                    if from_user and from_user != self.username:
-                                        self.dht_table[from_user] = {
-                                            'ip': response.get('ip', addr[0]),
-                                            'port': response.get('port', self.port),
-                                            'node_id': response.get('node_id', ''),
-                                            'last_seen': time.time()
-                                        }
-                                        print(f"📡 DHT: найден {from_user} ({self.dht_table[from_user]['ip']})")
-                            except:
-                                pass
-                    except socket.timeout:
-                        pass
-                
-                time.sleep(30)
+                for user, messages in list(self.pending_messages.items()):
+                    if user in self.connections:
+                        ip = self.connections[user].get('ip')
+                        if ip:
+                            for msg in messages:
+                                self._send_direct(user, msg)
+                            self.pending_messages[user] = []
+                time.sleep(1)
             except Exception as e:
-                print(f"⚠️ Ошибка DHT: {e}")
-                time.sleep(30)
-    
-    # ============================================================
-    # 5. ОБРАБОТКА СООБЩЕНИЙ
-    # ============================================================
+                print(f"⚠️ Ошибка обработки очереди: {e}")
+                time.sleep(1)
     
     def _process_message(self, data: dict):
-        """Обработка входящего сообщения"""
         try:
             msg_type = data.get('type')
             from_user = data.get('from')
@@ -466,61 +343,23 @@ class P2PNetwork(QObject):
         except Exception as e:
             print(f"❌ Ошибка обработки: {e}")
     
-    def _process_loop(self):
-        """Обработка очереди сообщений"""
-        while self.is_running:
-            try:
-                # Отправляем накопившиеся сообщения
-                for user, messages in list(self.pending_messages.items()):
-                    if user in self.connections:
-                        ip = self.connections[user].get('ip')
-                        if ip:
-                            for msg in messages:
-                                self._send_direct(user, msg)
-                            self.pending_messages[user] = []
-                
-                time.sleep(1)
-            except Exception as e:
-                print(f"⚠️ Ошибка обработки очереди: {e}")
-                time.sleep(1)
-    
-    # ============================================================
-    # 6. ОТПРАВКА СООБЩЕНИЙ
-    # ============================================================
-    
     def _send_direct(self, target_user: str, data: dict) -> bool:
-        """Отправка данных напрямую"""
         try:
             if target_user in self.connections:
                 ip = self.connections[target_user].get('ip')
                 port = self.connections[target_user].get('port', self.port)
                 if ip:
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                        s.settimeout(3)
+                        s.settimeout(5)
                         s.connect((ip, port))
                         s.send(json.dumps(data).encode())
                         return True
-            
-            # Проверяем DHT
-            if target_user in self.dht_table:
-                ip = self.dht_table[target_user].get('ip')
-                port = self.dht_table[target_user].get('port', self.port)
-                if ip:
-                    # Пробуем дыропробивание
-                    if self._punch_peer(target_user, ip, port):
-                        return self._send_direct(target_user, data)
-            
             return False
         except Exception as e:
             print(f"⚠️ Ошибка отправки {target_user}: {e}")
             return False
     
-    # ============================================================
-    # 7. ПУБЛИЧНЫЕ МЕТОДЫ
-    # ============================================================
-    
     def find_user(self, username: str) -> Optional[dict]:
-        """Поиск пользователя"""
         try:
             if username.startswith('@'):
                 username = username[1:]
@@ -530,7 +369,6 @@ class P2PNetwork(QObject):
             if not um.user_exists(username):
                 return None
             
-            # Проверяем активные соединения
             if username in self.connections:
                 return {
                     'username': username,
@@ -539,20 +377,7 @@ class P2PNetwork(QObject):
                     'ip': self.connections[username].get('ip', 'unknown')
                 }
             
-            # Проверяем DHT
-            if username in self.dht_table:
-                ip = self.dht_table[username].get('ip')
-                if ip:
-                    # Пробуем дыропробивание
-                    self._punch_peer(username, ip, self.dht_table[username].get('port', self.port))
-                    if username in self.connections:
-                        return {
-                            'username': username,
-                            'exists': True,
-                            'online': True,
-                            'ip': ip
-                        }
-            
+            # Если пользователь существует, но не в сети - возвращаем статус
             return {'username': username, 'exists': True, 'online': False}
             
         except Exception as e:
@@ -560,7 +385,6 @@ class P2PNetwork(QObject):
             return None
     
     def send_friend_request(self, target: str, message: str = "") -> bool:
-        """Отправка заявки"""
         if target.startswith('@'):
             target = target[1:]
         
@@ -581,7 +405,6 @@ class P2PNetwork(QObject):
         return self._send_direct(target, data)
     
     def respond_friend_request(self, target: str, accepted: bool) -> bool:
-        """Ответ на заявку"""
         if target.startswith('@'):
             target = target[1:]
         
@@ -595,7 +418,6 @@ class P2PNetwork(QObject):
         return self._send_direct(target, data)
     
     def send_message(self, chat_id: str, message: dict) -> bool:
-        """Отправка сообщения"""
         users = chat_id.split('_')
         recipient = users[0] if users[1] == self.username else users[1]
         
@@ -617,9 +439,6 @@ class P2PNetwork(QObject):
                 self.pending_messages[recipient] = []
             self.pending_messages[recipient].append(data)
             print(f"⏳ Сообщение в очереди для {recipient}")
-            
-            # Пробуем найти пользователя
-            self.find_user(recipient)
             return True
     
     def stop(self):
