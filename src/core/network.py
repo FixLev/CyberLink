@@ -1,17 +1,17 @@
 # src/core/network.py
-# P2P сеть - ПО РЕАЛЬНО РАБОТАЮЩЕМУ ПРИМЕРУ
+# P2P сеть - С ЛОКАЛЬНЫМ РЕЕСТРОМ IP
 
 import json
 import time
 import socket
 import threading
-import random
+import os
 from typing import Optional, Dict
 from PyQt5.QtCore import QObject, pyqtSignal
 
 
 class P2PNetwork(QObject):
-    """P2P сеть - по образу работающего чата с GitHub"""
+    """P2P сеть - с локальным реестром IP"""
     
     # Сигналы
     friend_request_received = pyqtSignal(str, str, str)
@@ -19,42 +19,77 @@ class P2PNetwork(QObject):
     message_received = pyqtSignal(str, dict)
     friend_online = pyqtSignal(str)
     friend_offline = pyqtSignal(str)
-    history_requested = pyqtSignal(str)
-    history_received = pyqtSignal(str, list)
     
     def __init__(self, username: str):
         super().__init__()
         self.username = username
         self.is_running = False
         
-        # Активные соединения
-        self.active_connections: Dict[str, dict] = {}
-        self.pending_messages: Dict[str, list] = {}
+        # Подключения
+        self.connections: Dict[str, dict] = {}  # username -> {ip, port, connected}
+        self.pending_requests: Dict[str, list] = {}  # username -> [messages]
         
-        # Порт - ФИКСИРОВАННЫЙ 3333 (как в примере)
+        # Порт
         self.port = 3333
+        self.host = ""
         
-        # Хост
-        self.host = "0.0.0.0"
+        # Сокет сервера
+        self.server_socket = None
         
-        # Локальный IP
         self.local_ip = self._get_local_ip()
         
-        # Кэш найденных пользователей
-        self.discovered_users: Dict[str, dict] = {}
+        # Файл с IP пользователей
+        self.registry_file = os.path.join("data", "user_ips.json")
+        self._load_registry()
         
-        print(f"🔌 ПОРТ: {self.port}")
+        # Сохраняем свой IP
+        self._save_my_ip()
+        
         print(f"🌐 IP: {self.local_ip}")
+        print(f"🔌 ПОРТ: {self.port}")
         
         self.start_network()
     
     def _get_local_ip(self) -> str:
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect(("8.8.8.8", 80))
-                return s.getsockname()[0]
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
         except:
             return "127.0.0.1"
+    
+    def _load_registry(self):
+        """Загрузка реестра IP"""
+        if os.path.exists(self.registry_file):
+            try:
+                with open(self.registry_file, 'r', encoding='utf-8') as f:
+                    self.registry = json.load(f)
+                print(f"📋 Загружено {len(self.registry)} IP-адресов")
+                return
+            except:
+                pass
+        self.registry = {}
+    
+    def _save_registry(self):
+        """Сохранение реестра IP"""
+        try:
+            os.makedirs(os.path.dirname(self.registry_file), exist_ok=True)
+            with open(self.registry_file, 'w', encoding='utf-8') as f:
+                json.dump(self.registry, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"⚠️ Ошибка сохранения реестра: {e}")
+    
+    def _save_my_ip(self):
+        """Сохранение своего IP"""
+        self.registry[self.username] = {
+            'ip': self.local_ip,
+            'port': self.port,
+            'last_seen': time.time()
+        }
+        self._save_registry()
+        print(f"💾 Сохранён IP: {self.username} -> {self.local_ip}:{self.port}")
     
     def start_network(self):
         """Запуск сети"""
@@ -63,20 +98,18 @@ class P2PNetwork(QObject):
         
         self.is_running = True
         
-        # Запускаем сервер (как в примере)
+        # Запускаем сервер
         self.server_thread = threading.Thread(target=self._run_server, daemon=True)
         self.server_thread.start()
         
-        # Запускаем клиент (как в примере)
-        self.client_thread = threading.Thread(target=self._run_client, daemon=True)
-        self.client_thread.start()
+        # Запускаем обработку очереди
+        self.process_thread = threading.Thread(target=self._process_loop, daemon=True)
+        self.process_thread.start()
         
-        print(f"🚀 P2P сеть запущена для {self.username} на порту {self.port}")
-        print(f"   🌐 IP: {self.local_ip}")
-        print("   💡 Используйте 'connect IP' для подключения к другому пользователю")
+        print(f"🚀 P2P сеть запущена на порту {self.port}")
     
     def _run_server(self):
-        """Сервер для приема сообщений (как в примере)"""
+        """Сервер для приема сообщений"""
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -89,8 +122,7 @@ class P2PNetwork(QObject):
             while self.is_running:
                 try:
                     conn, addr = self.server_socket.accept()
-                    print(f"📥 ПОДКЛЮЧЕНИЕ ОТ {addr[0]}:{addr[1]}")
-                    threading.Thread(target=self._handle_client, args=(conn, addr), daemon=True).start()
+                    threading.Thread(target=self._handle_connection, args=(conn, addr), daemon=True).start()
                 except socket.timeout:
                     continue
                 except Exception as e:
@@ -99,120 +131,119 @@ class P2PNetwork(QObject):
         except Exception as e:
             print(f"❌ Не удалось запустить сервер: {e}")
     
-    def _handle_client(self, conn, addr):
-        """Обработка клиента (как в примере)"""
+    def _handle_connection(self, conn, addr):
+        """Обработка входящего соединения"""
         try:
-            # Получаем данные
-            data = conn.recv(4096)
+            data = conn.recv(65536)
             if data:
                 try:
                     message = json.loads(data.decode())
-                    from_id = message.get('from')
+                    from_user = message.get('from')
                     
-                    if from_id:
-                        # Запоминаем соединение
-                        if from_id not in self.active_connections:
-                            self.active_connections[from_id] = {
+                    if from_user:
+                        # Сохраняем IP отправителя
+                        if from_user not in self.connections:
+                            self.connections[from_user] = {
+                                'ip': addr[0],
+                                'connected': True,
+                                'last_seen': time.time()
+                            }
+                            print(f"🔗 ПОДКЛЮЧИЛСЯ {from_user} ({addr[0]})")
+                            self.friend_online.emit(from_user)
+                            
+                            # Обновляем реестр
+                            self.registry[from_user] = {
                                 'ip': addr[0],
                                 'port': self.port,
-                                'last_ping': time.time()
+                                'last_seen': time.time()
                             }
-                            print(f"🔗 СОЕДИНЕНИЕ С {from_id}")
-                            self.friend_online.emit(from_id)
+                            self._save_registry()
                         
-                        self._process_incoming_message(message, addr[0])
+                        self._process_message(message)
+                        
                 except json.JSONDecodeError:
                     print(f"⚠️ Некорректные данные от {addr[0]}")
             
             conn.close()
         except Exception as e:
-            print(f"⚠️ Ошибка обработки клиента: {e}")
+            print(f"⚠️ Ошибка обработки соединения: {e}")
     
-    def _run_client(self):
-        """Клиент для подключения к другим (как в примере)"""
-        # Создаём клиентский сокет
-        self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.client_socket.settimeout(1)
-        
+    def _process_loop(self):
+        """Обработка очереди сообщений"""
         while self.is_running:
             try:
-                # Проверяем, есть ли сообщения для отправки
-                for peer_id, messages in list(self.pending_messages.items()):
-                    if peer_id in self.active_connections:
-                        ip = self.active_connections[peer_id].get('ip')
-                        if ip:
-                            try:
-                                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                                    s.settimeout(2)
-                                    s.connect((ip, self.port))
-                                    for msg in messages:
-                                        s.send(json.dumps(msg).encode())
-                                    self.pending_messages[peer_id] = []
-                            except Exception as e:
-                                print(f"⚠️ Ошибка отправки {peer_id}: {e}")
+                # Отправляем накопившиеся сообщения
+                for user, messages in list(self.pending_requests.items()):
+                    if user in self.connections and self.connections[user].get('connected'):
+                        for msg in messages:
+                            self._send_direct(user, msg)
+                        self.pending_requests[user] = []
                 
-                # Проверяем активные соединения
-                for peer_id in list(self.active_connections.keys()):
-                    if time.time() - self.active_connections[peer_id].get('last_ping', 0) > 60:
-                        del self.active_connections[peer_id]
-                        self.friend_offline.emit(peer_id)
+                # Проверяем соединения
+                for user in list(self.connections.keys()):
+                    if time.time() - self.connections[user].get('last_seen', 0) > 60:
+                        self.connections[user]['connected'] = False
+                        self.friend_offline.emit(user)
                 
-                time.sleep(1)
+                time.sleep(2)
             except Exception as e:
-                print(f"⚠️ Ошибка клиента: {e}")
-                time.sleep(1)
+                print(f"⚠️ Ошибка в цикле обработки: {e}")
+                time.sleep(2)
     
-    def _process_incoming_message(self, data: dict, from_ip: str = None):
+    def _process_message(self, data: dict):
         """Обработка входящего сообщения"""
         try:
             msg_type = data.get('type')
-            from_id = data.get('from')
+            from_user = data.get('from')
             
-            if not from_id:
+            if not from_user:
                 return
             
+            # Обновляем время последнего контакта
+            if from_user in self.connections:
+                self.connections[from_user]['last_seen'] = time.time()
+                self.connections[from_user]['connected'] = True
+            
             if msg_type == 'friend_request':
+                print(f"📨 ЗАЯВКА ОТ {from_user}")
                 self.friend_request_received.emit(
-                    from_id,
+                    from_user,
                     data.get('content', {}).get('message', ''),
-                    from_id
+                    from_user
                 )
             
             elif msg_type == 'friend_response':
+                print(f"📨 ОТВЕТ ОТ {from_user}: {data.get('content', {}).get('accepted', False)}")
                 self.friend_request_response.emit(
-                    from_id,
+                    from_user,
                     data.get('content', {}).get('accepted', False)
                 )
             
             elif msg_type == 'message':
+                print(f"💬 СООБЩЕНИЕ ОТ {from_user}")
                 self.message_received.emit(
                     data.get('content', {}).get('chat_id'),
                     data.get('content', {}).get('message', {})
                 )
             
-            elif msg_type == 'history_request':
-                self.history_requested.emit(from_id)
-            
-            elif msg_type == 'history_response':
-                history = data.get('content', {}).get('history', [])
-                self.history_received.emit(from_id, history)
-            
             elif msg_type == 'ping':
                 response = {'type': 'pong', 'from': self.username}
-                self._send_direct(from_id, response)
+                self._send_direct(from_user, response)
             
             elif msg_type == 'pong':
-                if from_id in self.active_connections:
-                    self.active_connections[from_id]['last_ping'] = time.time()
-                
+                if from_user in self.connections:
+                    self.connections[from_user]['connected'] = True
+                    self.friend_online.emit(from_user)
+                    
         except Exception as e:
             print(f"❌ Ошибка обработки сообщения: {e}")
     
-    def _send_direct(self, peer_id: str, data: dict) -> bool:
+    def _send_direct(self, target_user: str, data: dict) -> bool:
         """Отправка данных напрямую"""
         try:
-            if peer_id in self.active_connections:
-                ip = self.active_connections[peer_id].get('ip')
+            # Проверяем соединение
+            if target_user in self.connections:
+                ip = self.connections[target_user].get('ip')
                 if ip:
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                         s.settimeout(3)
@@ -220,88 +251,112 @@ class P2PNetwork(QObject):
                         s.send(json.dumps(data).encode())
                         return True
             
-            # Сохраняем в очередь
-            if peer_id not in self.pending_messages:
-                self.pending_messages[peer_id] = []
-            self.pending_messages[peer_id].append(data)
-            return False
+            # Если нет соединения, но есть IP в реестре
+            if target_user in self.registry:
+                ip = self.registry[target_user].get('ip')
+                if ip:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.settimeout(3)
+                        s.connect((ip, self.port))
+                        s.send(json.dumps(data).encode())
+                        # Сохраняем соединение
+                        self.connections[target_user] = {
+                            'ip': ip,
+                            'connected': True,
+                            'last_seen': time.time()
+                        }
+                        print(f"🔗 ПОДКЛЮЧЕНО К {target_user} ({ip})")
+                        return True
             
-        except Exception as e:
-            print(f"⚠️ Ошибка отправки {peer_id}: {e}")
-            if peer_id not in self.pending_messages:
-                self.pending_messages[peer_id] = []
-            self.pending_messages[peer_id].append(data)
             return False
-    
-    def connect_to_peer(self, ip: str, port: int = 3333) -> bool:
-        """Подключение к другому пользователю (как в примере)"""
-        try:
-            print(f"🔗 ПОДКЛЮЧЕНИЕ К {ip}:{port}")
-            
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(3)
-                s.connect((ip, port))
-                
-                # Отправляем информацию о себе
-                init_data = {
-                    'type': 'init',
-                    'from': self.username,
-                    'timestamp': time.time()
-                }
-                s.send(json.dumps(init_data).encode())
-                
-                # Сохраняем соединение
-                self.active_connections[self.username] = {
-                    'ip': ip,
-                    'port': port,
-                    'last_ping': time.time()
-                }
-                
-                print(f"✅ ПОДКЛЮЧЕНО К {ip}:{port}")
-                return True
-                
         except Exception as e:
-            print(f"❌ Ошибка подключения к {ip}:{port}: {e}")
+            print(f"⚠️ Ошибка отправки {target_user}: {e}")
             return False
     
     def find_user(self, username: str) -> Optional[dict]:
-        """Поиск пользователя (проверяем активные соединения)"""
+        """Поиск пользователя"""
         try:
             if username.startswith('@'):
                 username = username[1:]
             
-            print(f"🔍 ПОИСК ПОЛЬЗОВАТЕЛЯ {username}")
+            # Проверяем локальный реестр пользователей
+            from src.core.user_manager import UserManager
+            um = UserManager()
+            if not um.user_exists(username):
+                print(f"❌ {username} НЕ СУЩЕСТВУЕТ")
+                return None
             
-            if username in self.active_connections:
-                print(f"   ✅ {username} В АКТИВНЫХ СОЕДИНЕНИЯХ")
-                return {'username': username, 'exists': True, 'active': True}
+            # Проверяем, есть ли IP в реестре
+            if username in self.registry:
+                ip = self.registry[username].get('ip')
+                if ip:
+                    print(f"✅ Найден IP для {username}: {ip}")
+                    # Добавляем в соединения
+                    if username not in self.connections:
+                        self.connections[username] = {
+                            'ip': ip,
+                            'connected': False,
+                            'last_seen': 0
+                        }
+                    return {'username': username, 'exists': True, 'ip': ip}
             
-            print(f"   ❌ {username} НЕ НАЙДЕН")
-            return None
+            # Если IP не найден, но пользователь существует
+            print(f"⚠️ IP для {username} не найден, будет попытка подключения")
+            if username not in self.connections:
+                self.connections[username] = {
+                    'ip': None,
+                    'connected': False,
+                    'last_seen': 0
+                }
+            
+            return {'username': username, 'exists': True}
             
         except Exception as e:
             print(f"⚠️ Ошибка поиска {username}: {e}")
             return None
     
     def send_friend_request(self, target: str, message: str = "") -> bool:
-        """Отправка заявки"""
+        """Отправка заявки - С АВТОМАТИЧЕСКИМ ПОДКЛЮЧЕНИЕМ"""
         if target.startswith('@'):
             target = target[1:]
         
         print(f"📨 ОТПРАВКА ЗАЯВКИ {target}")
         
+        # Проверяем существование пользователя
         user_info = self.find_user(target)
         if not user_info:
             print(f"❌ {target} НЕ НАЙДЕН")
             return False
         
-        data = {
+        # Если есть IP, пробуем подключиться и отправить
+        if user_info.get('ip'):
+            print(f"✅ Найден IP для {target}: {user_info['ip']}")
+            data = {
+                'type': 'friend_request',
+                'from': self.username,
+                'to': target,
+                'content': {'message': message}
+            }
+            success = self._send_direct(target, data)
+            if success:
+                print(f"✅ Заявка отправлена {target}")
+                return True
+            else:
+                print(f"⚠️ Не удалось отправить заявку {target}, сохраняем в очередь")
+        
+        # Если нет IP или не удалось отправить - в очередь
+        if target not in self.pending_requests:
+            self.pending_requests[target] = []
+        
+        self.pending_requests[target].append({
             'type': 'friend_request',
             'from': self.username,
             'to': target,
             'content': {'message': message}
-        }
-        return self._send_direct(target, data)
+        })
+        
+        print(f"⏳ Заявка в очереди для {target}")
+        return True
     
     def respond_friend_request(self, target: str, accepted: bool) -> bool:
         """Ответ на заявку"""
@@ -314,7 +369,17 @@ class P2PNetwork(QObject):
             'to': target,
             'content': {'accepted': accepted}
         }
-        return self._send_direct(target, data)
+        
+        # Пробуем отправить сразу
+        if target in self.connections and self.connections[target].get('connected'):
+            return self._send_direct(target, data)
+        
+        # Если нет соединения - в очередь
+        if target not in self.pending_requests:
+            self.pending_requests[target] = []
+        self.pending_requests[target].append(data)
+        
+        return True
     
     def send_message(self, chat_id: str, message: dict) -> bool:
         """Отправка сообщения"""
@@ -331,47 +396,22 @@ class P2PNetwork(QObject):
                 'timestamp': time.time()
             }
         }
-        return self._send_direct(recipient, data)
-    
-    def request_chat_history(self, friend_id: str) -> bool:
-        """Запрос истории"""
-        data = {
-            'type': 'history_request',
-            'from': self.username,
-            'to': friend_id,
-            'timestamp': time.time()
-        }
-        return self._send_direct(friend_id, data)
-    
-    def send_chat_history(self, friend_id: str, history: list) -> bool:
-        """Отправка истории"""
-        data = {
-            'type': 'history_response',
-            'from': self.username,
-            'to': friend_id,
-            'content': {
-                'history': history,
-                'count': len(history)
-            },
-            'timestamp': time.time()
-        }
-        return self._send_direct(friend_id, data)
-    
-    def get_peer_ip(self, peer_id: str) -> Optional[str]:
-        if peer_id in self.active_connections:
-            return self.active_connections[peer_id].get('ip')
-        return None
+        
+        if recipient in self.connections and self.connections[recipient].get('connected'):
+            return self._send_direct(recipient, data)
+        
+        # В очередь
+        if recipient not in self.pending_requests:
+            self.pending_requests[recipient] = []
+        self.pending_requests[recipient].append(data)
+        
+        return True
     
     def stop(self):
         self.is_running = False
-        if hasattr(self, 'server_socket'):
+        if self.server_socket:
             try:
                 self.server_socket.close()
-            except:
-                pass
-        if hasattr(self, 'client_socket'):
-            try:
-                self.client_socket.close()
             except:
                 pass
         print("🛑 P2P сеть остановлена")
