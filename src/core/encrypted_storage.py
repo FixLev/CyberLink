@@ -1,5 +1,5 @@
 # src/core/encrypted_storage.py
-# Шифрованное хранилище (БЕЗ @)
+# Шифрованное хранилище - ИСПРАВЛЕННОЕ
 
 import os
 import json
@@ -57,10 +57,8 @@ class EncryptedStorage:
             print(f"⚠️ Ошибка расшифровки: {e}")
             return b''
     
-    # ===== МЕТОДЫ ДЛЯ JSON ДАННЫХ =====
-    
     def save(self, filename: str, data: dict) -> bool:
-        """Сохранение зашифрованного JSON файла"""
+        """Сохранение зашифрованного файла"""
         try:
             json_data = json.dumps(data, indent=2, ensure_ascii=False)
             encrypted = self._encrypt(json_data.encode('utf-8'))
@@ -74,7 +72,7 @@ class EncryptedStorage:
             return False
     
     def load(self, filename: str) -> dict:
-        """Загрузка зашифрованного JSON файла"""
+        """Загрузка зашифрованного файла"""
         filepath = os.path.join(self.data_dir, filename)
         if not os.path.exists(filepath):
             print(f"📄 Файл {filename} не найден, создаём новый")
@@ -89,27 +87,30 @@ class EncryptedStorage:
             decrypted = self._decrypt(encrypted)
             if not decrypted:
                 print(f"⚠️ Не удалось расшифровать {filename}")
-                return {}
+                # СОЗДАЁМ НОВЫЙ ФАЙЛ ВМЕСТО ОШИБКИ
+                new_data = {}
+                self.save(filename, new_data)
+                return new_data
             return json.loads(decrypted.decode('utf-8'))
         except json.JSONDecodeError as e:
             print(f"⚠️ Ошибка JSON в {filename}: {e}")
-            return {}
+            # СОЗДАЁМ НОВЫЙ ФАЙЛ
+            new_data = {}
+            self.save(filename, new_data)
+            return new_data
         except Exception as e:
             print(f"⚠️ Ошибка загрузки {filename}: {e}")
             return {}
     
-    # ===== МЕТОДЫ ДЛЯ АВАТАРОК (БИНАРНЫЕ ДАННЫЕ) =====
+    # ===== МЕТОДЫ ДЛЯ АВАТАРОК =====
     
     def encrypt_data(self, data: bytes) -> bytes:
-        """Шифрование бинарных данных (для аватарок)"""
         return self._encrypt(data)
     
     def decrypt_data(self, encrypted_data: bytes) -> bytes:
-        """Расшифровка бинарных данных (для аватарок)"""
         return self._decrypt(encrypted_data)
     
     def save_raw(self, filename: str, data: bytes) -> bool:
-        """Сохранение зашифрованных бинарных данных"""
         try:
             filepath = os.path.join(self.data_dir, filename)
             with open(filepath, 'wb') as f:
@@ -121,7 +122,6 @@ class EncryptedStorage:
             return False
     
     def load_raw(self, filename: str) -> bytes:
-        """Загрузка зашифрованных бинарных данных"""
         filepath = os.path.join(self.data_dir, filename)
         if not os.path.exists(filepath):
             return None
@@ -132,15 +132,11 @@ class EncryptedStorage:
             print(f"⚠️ Ошибка загрузки {filename}: {e}")
             return None
     
-    # ===== ОБЩИЕ МЕТОДЫ =====
-    
     def delete(self, filename: str):
-        """Удаление файла"""
         filepath = os.path.join(self.data_dir, filename)
         if os.path.exists(filepath):
             os.remove(filepath)
             print(f"🗑️ Удалён файл: {filename}")
     
     def exists(self, filename: str) -> bool:
-        """Проверка существования файла"""
         return os.path.exists(os.path.join(self.data_dir, filename))

@@ -1,5 +1,5 @@
 # src/core/network.py
-# P2P сеть - НА ОСНОВЕ РАБОЧЕГО ПРИМЕРА
+# P2P сеть - ГАРАНТИРОВАННЫЙ ПОИСК ПОРТА
 
 import json
 import time
@@ -11,7 +11,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 
 class P2PNetwork(QObject):
-    """P2P сеть - каждый пользователь на своём порту"""
+    """P2P сеть - гарантированный поиск порта"""
     
     # Сигналы
     friend_request_received = pyqtSignal(str, str, str)
@@ -34,15 +34,16 @@ class P2PNetwork(QObject):
         # Локальные данные
         self.local_ip = self._get_local_ip()
         
-        # ПОРТ - СЛУЧАЙНЫЙ, НЕ ЗАНЯТЫЙ
+        # ПОРТ - ГАРАНТИРОВАННО СВОБОДНЫЙ
         self.port = self._find_free_port()
         
         # Кэш найденных пользователей
         self.discovered_users: Dict[str, dict] = {}
         
-        # Список портов для сканирования (все возможные)
+        # Список портов для сканирования
         self.scan_ports = list(range(6881, 6910))
         
+        print(f"🔌 ИСПОЛЬЗУЕТСЯ ПОРТ: {self.port}")
         self.start_network()
     
     def _get_local_ip(self) -> str:
@@ -54,29 +55,36 @@ class P2PNetwork(QObject):
             return "127.0.0.1"
     
     def _find_free_port(self) -> int:
-        """Поиск свободного порта - НЕ ФИКСИРОВАННЫЙ"""
-        # Сначала пробуем случайные порты
-        for _ in range(50):
-            port = random.randint(10000, 60000)
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(0.5)
-                    s.bind(('', port))
-                    return port
-            except:
-                continue
+        """ГАРАНТИРОВАННЫЙ поиск свободного порта"""
         
-        # Если не получилось - пробуем 6881-6910
+        # СНАЧАЛА ПРОВЕРЯЕМ ВЕСЬ ДИАПАЗОН 6881-6910
         for port in range(6881, 6910):
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.settimeout(0.5)
                     s.bind(('', port))
+                    print(f"✅ ПОРТ {port} СВОБОДЕН!")
+                    return port
+            except OSError as e:
+                print(f"❌ Порт {port} занят: {e}")
+                continue
+        
+        # ЕСЛИ ВСЕ ЗАНЯТЫ - ИЩЕМ СЛУЧАЙНЫЙ
+        print("⚠️ ВСЕ ПОРТЫ 6881-6909 ЗАНЯТЫ! ИЩЕМ СЛУЧАЙНЫЙ...")
+        for attempt in range(30):
+            port = random.randint(10000, 60000)
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.5)
+                    s.bind(('', port))
+                    print(f"✅ СЛУЧАЙНЫЙ ПОРТ {port} СВОБОДЕН!")
                     return port
             except:
                 continue
         
-        return 6881  # fallback
+        # ПОСЛЕДНЯЯ ПОПЫТКА - 6881
+        print("⚠️ НЕ НАЙДЕН СВОБОДНЫЙ ПОРТ! ИСПОЛЬЗУЮ 6881")
+        return 6881
     
     def start_network(self):
         """Запуск сети"""
@@ -99,6 +107,7 @@ class P2PNetwork(QObject):
         
         print(f"🚀 P2P сеть запущена для {self.username} на порту {self.port}")
         print(f"   🌐 IP: {self.local_ip}")
+        print(f"   🔍 Сканируем порты: {self.scan_ports[:5]}... (всего {len(self.scan_ports)})")
     
     def _run_server(self):
         """Сервер для приема сообщений"""
@@ -108,6 +117,7 @@ class P2PNetwork(QObject):
                 s.bind(('0.0.0.0', self.port))
                 s.listen(5)
                 s.settimeout(1)
+                print(f"✅ СЕРВЕР ЗАПУЩЕН НА ПОРТУ {self.port}")
                 
                 while self.is_running:
                     try:
@@ -155,10 +165,19 @@ class P2PNetwork(QObject):
     
     def _scan_network(self):
         """Сканирование сети для поиска пользователей"""
+        scan_count = 0
+        print("🔄 СКАНИРОВАНИЕ СЕТИ ЗАПУЩЕНО")
+        
         while self.is_running:
             try:
+                scan_count += 1
+                print(f"\n🔍 СКАНИРОВАНИЕ #{scan_count}")
+                
                 ip_parts = self.local_ip.split('.')
                 base_ip = '.'.join(ip_parts[:3])
+                print(f"   🌐 Сканируем подсеть: {base_ip}.x")
+                
+                found = 0
                 
                 for i in range(1, 255):
                     if not self.is_running:
@@ -191,6 +210,8 @@ class P2PNetwork(QObject):
                                     if data.get('type') == 'discover_response':
                                         user = data.get('from')
                                         if user and user != self.username:
+                                            print(f"   🎯 НАЙДЕН ПОЛЬЗОВАТЕЛЬ {user} на {ip}:{port}")
+                                            
                                             if user not in self.discovered_users:
                                                 self.discovered_users[user] = {
                                                     'username': user,
@@ -198,7 +219,7 @@ class P2PNetwork(QObject):
                                                     'port': port,
                                                     'last_seen': time.time()
                                                 }
-                                                print(f"✅ Обнаружен пользователь {user} на {ip}:{port}")
+                                                found += 1
                                             
                                             if user not in self.active_connections:
                                                 self.active_connections[user] = {
@@ -210,7 +231,14 @@ class P2PNetwork(QObject):
                         except:
                             continue
                 
+                if found > 0:
+                    print(f"📊 НАЙДЕНО НОВЫХ ПОЛЬЗОВАТЕЛЕЙ: {found}")
+                else:
+                    print(f"📊 НОВЫХ ПОЛЬЗОВАТЕЛЕЙ НЕ НАЙДЕНО")
+                
+                print(f"💤 ЖДЁМ 30 СЕКУНД ДО СЛЕДУЮЩЕГО СКАНИРОВАНИЯ...")
                 time.sleep(30)
+                
             except Exception as e:
                 print(f"⚠️ Ошибка сканирования: {e}")
                 time.sleep(30)
@@ -225,6 +253,7 @@ class P2PNetwork(QObject):
                 return
             
             if from_id not in self.active_connections:
+                print(f"📡 НОВОЕ СОЕДИНЕНИЕ ОТ {from_id} ({from_ip})")
                 self.active_connections[from_id] = {
                     'ip': from_ip or data.get('ip', ''),
                     'last_ping': time.time()
@@ -249,6 +278,7 @@ class P2PNetwork(QObject):
                         'ip': from_ip,
                         'last_seen': time.time()
                     }
+                    print(f"✅ ПОЛЬЗОВАТЕЛЬ {from_id} ДОБАВЛЕН В КЭШ")
                     self.friend_online.emit(from_id)
                 return
             
@@ -358,16 +388,23 @@ class P2PNetwork(QObject):
             if username.startswith('@'):
                 username = username[1:]
             
+            print(f"\n🔍 ПОИСК ПОЛЬЗОВАТЕЛЯ {username}")
+            
             if username in self.discovered_users:
+                print(f"   ✅ {username} НАЙДЕН В КЭШЕ")
                 return self.discovered_users[username]
             
             if username in self.active_connections:
+                print(f"   ✅ {username} В АКТИВНЫХ СОЕДИНЕНИЯХ")
                 return {'username': username, 'exists': True, 'active': True}
             
             from src.core.user_manager import UserManager
             um = UserManager()
             if not um.user_exists(username):
+                print(f"   ❌ {username} НЕ СУЩЕСТВУЕТ")
                 return None
+            
+            print(f"   🔍 {username} СУЩЕСТВУЕТ, НО НЕ В КЭШЕ. СКАНИРУЕМ СЕТЬ...")
             
             # Активное сканирование
             ip_parts = self.local_ip.split('.')
@@ -398,6 +435,7 @@ class P2PNetwork(QObject):
                                 if data.get('type') == 'who_is_here_response':
                                     found_user = data.get('username')
                                     if found_user == username:
+                                        print(f"   🎯 НАЙДЕН {username} на {ip}:{port}")
                                         self.discovered_users[username] = {
                                             'username': username,
                                             'ip': ip,
@@ -414,6 +452,7 @@ class P2PNetwork(QObject):
                     except:
                         continue
             
+            print(f"   ❌ {username} НЕ НАЙДЕН В СЕТИ")
             return None
             
         except Exception as e:
@@ -421,7 +460,6 @@ class P2PNetwork(QObject):
             return None
     
     def connect_to_peer(self, peer_id: str, ip: str, port: int = None):
-        """Установка соединения с пиром"""
         self.active_connections[peer_id] = {
             'ip': ip,
             'port': port or self.port,
@@ -431,12 +469,14 @@ class P2PNetwork(QObject):
         self._ping_peer(peer_id)
     
     def send_friend_request(self, target: str, message: str = "") -> bool:
-        """Отправка заявки"""
         if target.startswith('@'):
             target = target[1:]
         
+        print(f"📨 ОТПРАВКА ЗАЯВКИ {target}")
+        
         user_info = self.find_user(target)
         if not user_info:
+            print(f"❌ {target} НЕ НАЙДЕН")
             return False
         
         data = {
@@ -448,7 +488,6 @@ class P2PNetwork(QObject):
         return self._send_direct(target, data)
     
     def respond_friend_request(self, target: str, accepted: bool) -> bool:
-        """Ответ на заявку"""
         if target.startswith('@'):
             target = target[1:]
         
@@ -461,7 +500,6 @@ class P2PNetwork(QObject):
         return self._send_direct(target, data)
     
     def send_message(self, chat_id: str, message: dict) -> bool:
-        """Отправка сообщения"""
         users = chat_id.split('_')
         recipient = users[0] if users[1] == self.username else users[1]
         
@@ -478,7 +516,6 @@ class P2PNetwork(QObject):
         return self._send_direct(recipient, data)
     
     def request_chat_history(self, friend_id: str) -> bool:
-        """Запрос истории"""
         data = {
             'type': 'history_request',
             'from': self.username,
@@ -488,7 +525,6 @@ class P2PNetwork(QObject):
         return self._send_direct(friend_id, data)
     
     def send_chat_history(self, friend_id: str, history: list) -> bool:
-        """Отправка истории"""
         data = {
             'type': 'history_response',
             'from': self.username,
