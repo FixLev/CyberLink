@@ -478,12 +478,35 @@ class P2PNetwork(QObject):
     def send_friend_request(self, target: str, message: str = "") -> bool:
         if target.startswith("@"):
             target = target[1:]
-        self._send_or_queue(target, {
-            "type": "friend_request",
-            "message": message,
-            "pubkey": self.pubkey_bytes.hex(),
-        })
-        return True
+
+        # 1. Если он уже онлайн — отправляем мгновенно
+        if target in self.peers:
+            return self._send(target, {
+                "type": "friend_request",
+                "message": message,
+                "pubkey": self.pubkey_bytes.hex(),
+            })
+
+        # 2. Если не онлайн — пробуем найти его в DHT прямо сейчас
+        print(f"🔍 Проверка существования {target} в DHT...")
+        self._dht_find(target)
+
+        # Ждем короткое время (1-2 сек), чтобы DHT успел ответить
+        # В реальном P2P это может занять больше времени, но для UI это компромисс
+        start_wait = time.time()
+        while time.time() - start_wait < 2.0:
+            if target in self.peers:
+                # Нашли! Теперь отправляем
+                return self._send(target, {
+                    "type": "friend_request",
+                    "message": message,
+                    "pubkey": self.pubkey_bytes.hex(),
+                })
+            time.sleep(0.2)
+
+        # 3. Если за 2 секунды никто не ответил — пользователь либо оффлайн, либо не существует
+        print(f"❌ Пользователь {target} не найден в сети.")
+        return False
 
     def respond_friend_request(self, target: str, accepted: bool) -> bool:
         if target.startswith("@"):

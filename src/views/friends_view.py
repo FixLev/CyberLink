@@ -608,31 +608,21 @@ class FriendsView(QWidget):
             self.network.add_peer_manual(username, ip)
             
             # 3. ОТПРАВЛЯЕМ ЗАЯВКУ через сеть!
-            print(f"📨 ОТПРАВКА ЗАЯВКИ {username} через ретранслятор...")
-            
-            request_data = {
-                'type': 'friend_request',
-                'from': self.username,
-                'to': username,
-                'content': {
-                    'message': f"Привет! Добавь меня в друзья!",
-                    'timestamp': time.time()
-                }
-            }
-            
-            # Отправляем через ретранслятор
-            success = self.network.send_via_relay(username, request_data)
-            
+            print(f"📨 ОТПРАВКА ЗАЯВКИ {username}...")
+
+            if self.friends_manager:
+                success = self.friends_manager.send_friend_request(username, "Привет! Добавь меня в друзья!")
+            elif self.network:
+                success = self.network.send_friend_request(username, "Привет! Добавь меня в друзья!")
+            else:
+                success = False
+
             if success:
-                # Добавляем в менеджер друзей
-                if self.friends_manager:
-                    self.friends_manager.add_friend(username, username)
-                
                 self.show_success(f"✅ Заявка отправлена {username}!")
             else:
-                self.show_warning(f"⚠️ Заявка не отправлена, но {username} добавлен локально.\n"
+                self.show_warning(f"⚠️ Не удалось отправить заявку {username}.\n"
                                   f"Попробуйте позже или проверьте подключение.")
-            
+
             self.load_friends()
     
     def add_friend(self):

@@ -50,21 +50,19 @@ class FriendsManager(QObject):
         """Подключение сигналов сети"""
         if not self.network:
             return
-        
-        if hasattr(self.network, 'friend_request_received'):
-            self.network.friend_request_received.connect(self._on_friend_request)
-        
-        if hasattr(self.network, 'friend_request_response'):
-            self.network.friend_request_response.connect(self._on_friend_response)
-        
-        if hasattr(self.network, 'friend_online'):
-            self.network.friend_online.connect(self._on_online)
-        
-        if hasattr(self.network, 'friend_offline'):
-            self.network.friend_offline.connect(self._on_offline)
-        
-        if hasattr(self.network, 'message_received'):
-            self.network.message_received.connect(self._on_message)
+
+        # Используем более надежный способ подключения
+        try:
+            if hasattr(self.network, 'friend_request_received'):
+                self.network.friend_request_received.disconnect() # На всякий случай
+        except:
+            pass
+
+        self.network.friend_request_received.connect(self._on_friend_request)
+        self.network.friend_request_response.connect(self._on_friend_response)
+        self.network.friend_online.connect(self._on_online)
+        self.network.friend_offline.connect(self._on_offline)
+        self.network.message_received.connect(self._on_message)
     
     def load_friends(self):
         """Загрузка списка друзей"""
