@@ -1,7 +1,10 @@
 # src/views/friends_view.py
-# Страница друзей и приглашений
+# Страница друзей - ПОЛНАЯ РАБОЧАЯ ВЕРСИЯ
 
 import json
+import time
+import hashlib
+import secrets
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
@@ -18,7 +21,6 @@ class FriendsView(QWidget):
         self.friends_manager = friends_manager
         self.network = network
         
-        # Для обратной совместимости
         if friends_manager is None:
             self.profile_manager = ProfileManager(username)
         else:
@@ -27,14 +29,12 @@ class FriendsView(QWidget):
         self.init_ui()
         self.load_friends()
         
-        # Подключаем сигналы если есть friends_manager
         if self.friends_manager:
             self.friends_manager.friend_added.connect(self.load_friends)
             self.friends_manager.friend_removed.connect(self.load_friends)
             self.friends_manager.friend_request_received.connect(self.load_friends)
             self.friends_manager.friend_request_responded.connect(self.load_friends)
         
-        # Если есть сеть - подключаем её сигналы
         if self.network:
             self.network.friend_online.connect(self.load_friends)
             self.network.friend_offline.connect(self.load_friends)
@@ -44,13 +44,17 @@ class FriendsView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         
-        # Заголовок
+        # === ЗАГОЛОВОК ===
         header = QFrame()
-        header.setFixedHeight(60)
+        header.setFixedHeight(90)
         header.setStyleSheet("border-bottom: 1px solid rgba(79, 195, 247, 0.06);")
         
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(20, 0, 20, 0)
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(20, 10, 20, 10)
+        header_layout.setSpacing(5)
+        
+        # Верхняя строка
+        top_row = QHBoxLayout()
         
         title = QLabel("🤝 Друзья")
         title.setStyleSheet("""
@@ -59,12 +63,12 @@ class FriendsView(QWidget):
             color: #f5f5f5;
             font-family: 'TT Mussels', 'Arial', sans-serif;
         """)
-        header_layout.addWidget(title)
+        top_row.addWidget(title)
         
-        header_layout.addStretch()
+        top_row.addStretch()
         
-        # Кнопка добавить друга
-        add_btn = QPushButton("➕ Добавить друга")
+        # Кнопка: Добавить друга (по логину)
+        add_btn = QPushButton("➕ По логину")
         add_btn.setCursor(Qt.PointingHandCursor)
         add_btn.setStyleSheet("""
             QPushButton {
@@ -72,8 +76,8 @@ class FriendsView(QWidget):
                 color: #4fc3f7;
                 border: none;
                 border-radius: 8px;
-                padding: 8px 18px;
-                font-size: 14px;
+                padding: 6px 14px;
+                font-size: 12px;
                 font-family: 'TT Mussels', 'Arial', sans-serif;
                 font-weight: bold;
             }
@@ -82,16 +86,16 @@ class FriendsView(QWidget):
             }
         """)
         add_btn.clicked.connect(self.add_friend)
-        header_layout.addWidget(add_btn)
+        top_row.addWidget(add_btn)
         
-        # Кнопка подключения по IP
-        ip_btn = QPushButton("🔗 Подключиться по IP")
-        ip_btn.setCursor(Qt.PointingHandCursor)
-        ip_btn.setStyleSheet("""
+        # Кнопка: Добавить вручную (по IP)
+        manual_btn = QPushButton("🔧 Добавить вручную")
+        manual_btn.setCursor(Qt.PointingHandCursor)
+        manual_btn.setStyleSheet("""
             QPushButton {
                 background: rgba(255, 170, 0, 0.12);
                 color: #ffaa00;
-                border: none;
+                border: 1px solid rgba(255, 170, 0, 0.15);
                 border-radius: 8px;
                 padding: 6px 14px;
                 font-size: 12px;
@@ -102,12 +106,45 @@ class FriendsView(QWidget):
                 background: rgba(255, 170, 0, 0.2);
             }
         """)
-        ip_btn.clicked.connect(self.connect_by_ip)
-        header_layout.addWidget(ip_btn)
+        manual_btn.clicked.connect(self.add_friend_manual)
+        top_row.addWidget(manual_btn)
+        
+        # Кнопка: Мой IP
+        my_ip_btn = QPushButton("📋 Мой IP")
+        my_ip_btn.setCursor(Qt.PointingHandCursor)
+        my_ip_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(79, 195, 247, 0.08);
+                color: #4fc3f7;
+                border: 1px solid rgba(79, 195, 247, 0.15);
+                border-radius: 8px;
+                padding: 6px 14px;
+                font-size: 12px;
+                font-family: 'TT Mussels', 'Arial', sans-serif;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: rgba(79, 195, 247, 0.15);
+            }
+        """)
+        my_ip_btn.clicked.connect(self.show_my_ip)
+        top_row.addWidget(my_ip_btn)
+        
+        header_layout.addLayout(top_row)
+        
+        # Инфо-строка
+        self.info_label = QLabel("💡 Если друг не найден по логину — добавьте вручную по IP")
+        self.info_label.setStyleSheet("""
+            color: #666688;
+            font-size: 11px;
+            font-family: 'TT Mussels', 'Arial', sans-serif;
+            padding-left: 5px;
+        """)
+        header_layout.addWidget(self.info_label)
         
         layout.addWidget(header)
         
-        # Контент
+        # === КОНТЕНТ ===
         self.content = QScrollArea()
         self.content.setWidgetResizable(True)
         self.content.setStyleSheet("""
@@ -212,18 +249,15 @@ class FriendsView(QWidget):
         self.content_layout.addWidget(container)
     
     def load_friends(self):
-        # Очищаем контейнеры
         self._clear_layout(self.pending_container)
         self._clear_layout(self.friends_container)
         
-        # Если есть friends_manager - используем его
         if self.friends_manager:
             self._load_friends_from_manager()
         else:
             self._load_friends_from_profile()
     
     def _clear_layout(self, layout):
-        """Очистка layout от всех виджетов"""
         if layout is None:
             return
         while layout.count():
@@ -232,7 +266,6 @@ class FriendsView(QWidget):
                 item.widget().deleteLater()
     
     def _load_friends_from_manager(self):
-        """Загрузка из FriendsManager"""
         pending = self.friends_manager.get_pending_requests()
         friends = self.friends_manager.get_friends_list()
         
@@ -252,19 +285,17 @@ class FriendsView(QWidget):
                 display_name = friend.get('display_name', friend_id)
                 self.friends_container.addWidget(self.create_friend_item(friend_id, display_name))
         else:
-            empty = QLabel("У вас пока нет друзей\n\n💫 Нажмите «Добавить друга» чтобы найти друзей")
+            empty = QLabel("У вас пока нет друзей\n\n💫 Нажмите «По логину» или «Добавить вручную»")
             empty.setStyleSheet("color: #666688; font-size: 13px; font-family: 'TT Mussels', 'Arial', sans-serif; padding: 10px;")
             empty.setAlignment(Qt.AlignCenter)
             self.friends_container.addWidget(empty)
         
-        # Приветственное сообщение
         if self.profile_manager:
             profile = self.profile_manager.get_profile()
             welcome = profile.get("welcome_message", "")
             self.welcome_input.setText(welcome)
     
     def _load_friends_from_profile(self):
-        """Загрузка из ProfileManager (старый способ)"""
         contacts = self.profile_manager.get_contacts()
         
         pending = contacts.get("pending", [])
@@ -281,7 +312,7 @@ class FriendsView(QWidget):
             for username in friends:
                 self.friends_container.addWidget(self.create_friend_item(username, username))
         else:
-            empty = QLabel("У вас пока нет друзей\n\n💫 Нажмите «Добавить друга» чтобы найти друзей")
+            empty = QLabel("У вас пока нет друзей\n\n💫 Нажмите «По логину» или «Добавить вручную»")
             empty.setStyleSheet("color: #666688; font-size: 13px; font-family: 'TT Mussels', 'Arial', sans-serif; padding: 10px;")
             empty.setAlignment(Qt.AlignCenter)
             self.friends_container.addWidget(empty)
@@ -361,7 +392,6 @@ class FriendsView(QWidget):
         
         layout.addLayout(top_row)
         
-        # Приветственное сообщение
         msg = request.get('message', '') if request else ''
         if msg:
             msg_label = QLabel(f"💬 {msg}")
@@ -393,14 +423,12 @@ class FriendsView(QWidget):
         layout = QHBoxLayout(item)
         layout.setContentsMargins(10, 5, 10, 5)
         
-        # Статус
         is_online = False
         if self.friends_manager:
             is_online = self.friends_manager.is_online(username)
         elif self.network:
-            # Проверяем через сеть
-            if username in self.network.connections:
-                is_online = self.network.connections[username].get('connected', False)
+            if username in self.network.peers:
+                is_online = True
         
         status_icon = "🟢" if is_online else "⚪"
         
@@ -461,25 +489,63 @@ class FriendsView(QWidget):
         
         return item
     
-    def connect_by_ip(self):
-        """Ручное подключение к пользователю по IP"""
+    # ============================================================
+    # МЕТОДЫ
+    # ============================================================
+    
+    def show_my_ip(self):
+        """Показать свой IP"""
+        if self.network:
+            ip = self.network.get_my_ip() if hasattr(self.network, 'get_my_ip') else "Неизвестно"
+            
+            show_cyber_message(
+                self,
+                "Мой IP",
+                f"🌍 Внешний IP: {ip}:3333\n\n"
+                f"💡 Сообщите IP другу для ручного подключения",
+                QMessageBox.Information
+            )
+    
+    def add_friend_manual(self):
+        """Ручное добавление друга по IP с отправкой заявки"""
         if not self.network:
-            self.show_error("Сеть не доступна")
+            self.show_error("❌ Сеть не доступна")
             return
         
-        dialog = CyberDialog(self, "Подключение по IP", width=350, height=180)
+        dialog = CyberDialog(self, "Добавить друга вручную", width=420, height=320)
         
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setSpacing(15)
-        layout.setContentsMargins(0, 0, 0, 0)
         
-        label = QLabel("Введите IP адрес пользователя:")
-        label.setStyleSheet("color: #f5f5f5; font-size: 14px; font-family: 'TT Mussels', 'Arial', sans-serif;")
-        layout.addWidget(label)
+        label1 = QLabel("Введите логин друга:")
+        label1.setStyleSheet("color: #f5f5f5; font-size: 14px; font-family: 'TT Mussels', 'Arial', sans-serif;")
+        layout.addWidget(label1)
+        
+        username_input = QLineEdit()
+        username_input.setPlaceholderText("username")
+        username_input.setStyleSheet("""
+            QLineEdit {
+                background: rgba(30, 30, 48, 0.6);
+                color: #f5f5f5;
+                border: 1px solid rgba(79, 195, 247, 0.15);
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 14px;
+                font-family: 'TT Mussels', 'Arial', sans-serif;
+            }
+            QLineEdit:focus {
+                border-color: rgba(79, 195, 247, 0.4);
+            }
+        """)
+        layout.addWidget(username_input)
+        
+        label2 = QLabel("Введите IP-адрес друга:")
+        label2.setStyleSheet("color: #f5f5f5; font-size: 14px; font-family: 'TT Mussels', 'Arial', sans-serif;")
+        layout.addWidget(label2)
         
         ip_input = QLineEdit()
-        ip_input.setPlaceholderText("176.112.224.188")
+        ip_input.setPlaceholderText("192.168.1.100")
         ip_input.setStyleSheet("""
             QLineEdit {
                 background: rgba(30, 30, 48, 0.6);
@@ -496,25 +562,81 @@ class FriendsView(QWidget):
         """)
         layout.addWidget(ip_input)
         
-        layout.addStretch()
+        info = QLabel("💡 IP можно узнать у друга через кнопку «Мой IP»\n"
+                      "💡 После добавления будет отправлена заявка")
+        info.setStyleSheet("color: #8888aa; font-size: 11px; font-family: 'TT Mussels', 'Arial', sans-serif;")
+        layout.addWidget(info)
         
+        layout.addStretch()
         dialog.set_content(content)
         
         if dialog.exec_() == QDialog.Accepted:
+            username = username_input.text().strip()
             ip = ip_input.text().strip()
-            if not ip:
+            
+            if not username or not ip:
                 return
             
-            print(f"🔗 РУЧНОЕ ПОДКЛЮЧЕНИЕ К {ip}")
+            if username.startswith('@'):
+                username = username[1:]
             
-            success = self.network.connect_to_ip(ip)
+            if username == self.username:
+                self.show_error("❌ Нельзя добавить самого себя!")
+                return
+            
+            if self.friends_manager and self.friends_manager.is_friend(username):
+                self.show_error(f"❌ {username} уже в друзьях!")
+                return
+            
+            # 1. Добавляем в локальный реестр пользователей
+            from src.core.user_manager import UserManager
+            
+            um = UserManager()
+            um.registry = um._load_registry()
+            
+            if username not in um.registry["users"]:
+                um.registry["users"][username] = {
+                    "created_at": time.time(),
+                    "salt": secrets.token_hex(16),
+                    "password_hash": hashlib.sha256("manual_user".encode()).hexdigest(),
+                    "is_manual": True
+                }
+                um._save_registry()
+                print(f"📝 Пользователь {username} добавлен в реестр вручную")
+            
+            # 2. Добавляем в сеть (пиры)
+            self.network.add_peer_manual(username, ip)
+            
+            # 3. ОТПРАВЛЯЕМ ЗАЯВКУ через сеть!
+            print(f"📨 ОТПРАВКА ЗАЯВКИ {username} через ретранслятор...")
+            
+            request_data = {
+                'type': 'friend_request',
+                'from': self.username,
+                'to': username,
+                'content': {
+                    'message': f"Привет! Добавь меня в друзья!",
+                    'timestamp': time.time()
+                }
+            }
+            
+            # Отправляем через ретранслятор
+            success = self.network.send_via_relay(username, request_data)
+            
             if success:
-                self.show_success(f"Подключение к {ip} установлено!")
-                self.load_friends()
+                # Добавляем в менеджер друзей
+                if self.friends_manager:
+                    self.friends_manager.add_friend(username, username)
+                
+                self.show_success(f"✅ Заявка отправлена {username}!")
             else:
-                self.show_error(f"Не удалось подключиться к {ip}\n\nПроверьте:\n- IP адрес правильный\n- Удалённый пользователь запущен\n- Порт 3333 открыт")
+                self.show_warning(f"⚠️ Заявка не отправлена, но {username} добавлен локально.\n"
+                                  f"Попробуйте позже или проверьте подключение.")
+            
+            self.load_friends()
     
     def add_friend(self):
+        """Добавление друга по логину (автоматический поиск)"""
         dialog = CyberDialog(self, "Добавить друга")
         
         content = QWidget()
@@ -522,7 +644,7 @@ class FriendsView(QWidget):
         layout.setSpacing(15)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        label = QLabel("Введите имя пользователя:")
+        label = QLabel("Введите логин друга:")
         label.setStyleSheet("color: #f5f5f5; font-size: 14px; font-family: 'TT Mussels', 'Arial', sans-serif;")
         layout.addWidget(label)
         
@@ -574,7 +696,6 @@ class FriendsView(QWidget):
         if dialog.exec_() == QDialog.Accepted:
             target_username = input_field.text().strip()
             
-            # Убираем @ если пользователь его ввёл
             if target_username.startswith('@'):
                 target_username = target_username[1:]
             
@@ -582,81 +703,50 @@ class FriendsView(QWidget):
                 return
             
             if target_username == self.username:
-                self.show_error("Нельзя добавить самого себя!")
+                self.show_error("❌ Нельзя добавить самого себя!")
                 return
             
-            # Проверяем через friends_manager
-            if self.friends_manager:
-                if self.friends_manager.is_friend(target_username):
-                    self.show_error(f"{target_username} уже в друзьях!")
+            if self.friends_manager and self.friends_manager.is_friend(target_username):
+                self.show_error(f"❌ {target_username} уже в друзьях!")
+                return
+            
+            if self.network:
+                print(f"🔍 Поиск пользователя {target_username}...")
+                
+                user_info = self.network.find_user(target_username)
+                if not user_info:
+                    reply = QMessageBox.question(
+                        self,
+                        "Пользователь не найден",
+                        f"Пользователь {target_username} не найден в сети.\n\n"
+                        f"Хотите добавить его вручную по IP?",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    if reply == QMessageBox.Yes:
+                        self.add_friend_manual()
                     return
                 
-                # Проверяем, не отправлена ли уже заявка
-                pending = self.friends_manager.get_pending_requests()
-                for req in pending:
-                    if req.get('from') == target_username:
-                        self.show_error(f"Заявка от {target_username} уже ожидает!")
-                        return
-                
-                # Проверяем существование пользователя в сети
-                if self.network:
-                    print(f"🔍 Проверка существования пользователя {target_username} в сети...")
-                    user_info = self.network.find_user(target_username)
-                    if not user_info:
-                        # Проверяем локальный реестр
-                        from src.core.user_manager import UserManager
-                        um = UserManager()
-                        if um.user_exists(target_username):
-                            self.show_error(f"Пользователь {target_username} найден локально, но не активен в сети.\n\n💡 Попробуйте:\n1. Подключиться по IP\n2. Убедитесь, что пользователь запущен")
-                        else:
-                            self.show_error(f"Пользователь {target_username} не найден в сети")
-                        return
-                    print(f"✅ Пользователь {target_username} найден в сети")
-                
-                # Отправляем заявку
                 if self.friends_manager.send_friend_request(target_username, msg_input.text().strip()):
-                    self.show_success(f"Заявка {target_username} отправлена!")
+                    self.show_success(f"✅ Заявка {target_username} отправлена!")
                     self.load_friends()
                 else:
-                    self.show_error(f"Не удалось отправить заявку {target_username}")
+                    self.show_error(f"❌ Не удалось отправить заявку {target_username}")
             else:
-                # Старый способ через ProfileManager
-                contacts = self.profile_manager.get_contacts()
-                if target_username in contacts.get("contacts", []):
-                    self.show_error(f"{target_username} уже в друзьях!")
-                    return
-                if target_username in contacts.get("pending", []):
-                    self.show_error(f"Заявка {target_username} уже отправлена!")
-                    return
-                
-                if self.profile_manager.add_contact(target_username):
-                    welcome_msg = msg_input.text().strip()
-                    if welcome_msg:
-                        contacts = self.profile_manager.get_contacts()
-                        if "welcome_messages" not in contacts:
-                            contacts["welcome_messages"] = {}
-                        contacts["welcome_messages"][target_username] = welcome_msg
-                        with open(self.profile_manager.contacts_file, 'w', encoding='utf-8') as f:
-                            json.dump(contacts, f, indent=2, ensure_ascii=False)
-                    
-                    self.show_success(f"Заявка {target_username} отправлена!")
-                    self.load_friends()
-                else:
-                    self.show_error(f"Не удалось отправить заявку {target_username}")
+                self.show_error("❌ Сеть не доступна")
     
     def accept_friend(self, username):
         if self.friends_manager:
             if self.friends_manager.accept_friend_request(username):
-                self.show_success(f"{username} добавлен в друзья!")
+                self.show_success(f"✅ {username} добавлен в друзья!")
                 self.load_friends()
             else:
-                self.show_error(f"Не удалось принять заявку от {username}")
+                self.show_error(f"❌ Не удалось принять заявку от {username}")
         else:
             if self.profile_manager.accept_contact(username):
-                self.show_success(f"{username} добавлен в друзья!")
+                self.show_success(f"✅ {username} добавлен в друзья!")
                 self.load_friends()
             else:
-                self.show_error(f"Не удалось принять заявку от {username}")
+                self.show_error(f"❌ Не удалось принять заявку от {username}")
     
     def reject_friend(self, username):
         reply = QMessageBox.question(
@@ -668,7 +758,7 @@ class FriendsView(QWidget):
         if reply == QMessageBox.Yes:
             if self.friends_manager:
                 if self.friends_manager.reject_friend_request(username):
-                    self.show_success(f"Заявка от {username} отклонена")
+                    self.show_success(f"✅ Заявка от {username} отклонена")
                     self.load_friends()
             else:
                 contacts = self.profile_manager.get_contacts()
@@ -676,7 +766,7 @@ class FriendsView(QWidget):
                     contacts["pending"].remove(username)
                     with open(self.profile_manager.contacts_file, 'w', encoding='utf-8') as f:
                         json.dump(contacts, f, indent=2, ensure_ascii=False)
-                    self.show_success(f"Заявка от {username} отклонена")
+                    self.show_success(f"✅ Заявка от {username} отклонена")
                     self.load_friends()
     
     def remove_friend(self, username):
@@ -689,11 +779,11 @@ class FriendsView(QWidget):
         if reply == QMessageBox.Yes:
             if self.friends_manager:
                 if self.friends_manager.remove_friend(username):
-                    self.show_success(f"{username} удалён из друзей")
+                    self.show_success(f"✅ {username} удалён из друзей")
                     self.load_friends()
             else:
                 if self.profile_manager.remove_contact(username):
-                    self.show_success(f"{username} удалён из друзей")
+                    self.show_success(f"✅ {username} удалён из друзей")
                     self.load_friends()
     
     def open_chat(self, username):
@@ -713,3 +803,6 @@ class FriendsView(QWidget):
     
     def show_error(self, message):
         show_cyber_message(self, "Ошибка", f"❌ {message}", QMessageBox.Critical)
+    
+    def show_warning(self, message):
+        show_cyber_message(self, "Внимание", f"⚠️ {message}", QMessageBox.Warning)

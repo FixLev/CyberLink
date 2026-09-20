@@ -221,7 +221,7 @@ class UserManager:
         return list(self.registry["users"].keys())
     
     def create_session(self, username: str) -> str:
-        """Создание сессионного токена для автоматического входа"""
+        """Создание сессионного токена"""
         token = secrets.token_urlsafe(32)
         session_file = self.data_dir.parent / "session.json"
         
@@ -262,7 +262,7 @@ class UserManager:
         return None
     
     def clear_session(self, username: str):
-        """Очистка сессии пользователя"""
+        """Очистка сессии"""
         session_file = self.data_dir.parent / "session.json"
         if not session_file.exists():
             return
