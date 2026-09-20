@@ -31,6 +31,7 @@ QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 from PyQt5.QtGui import QFontDatabase
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
 
 from src.views.main_view import MainView
 from src.views.login_view import LoginView
